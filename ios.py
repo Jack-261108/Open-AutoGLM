@@ -18,13 +18,11 @@ import os
 import shutil
 import subprocess
 import sys
-from urllib.parse import urlparse
-
-from openai import OpenAI
 
 from phone_agent.agent_ios import IOSAgentConfig, IOSPhoneAgent
+from phone_agent.cli import add_model_arguments, resolve_model_config
 from phone_agent.config.apps_ios import list_supported_apps
-from phone_agent.model import ModelConfig
+from phone_agent.model import ModelClient
 from phone_agent.xctest import XCTestConnection, list_devices
 
 
@@ -159,95 +157,7 @@ def check_system_requirements(wda_url: str = "http://localhost:8100") -> bool:
     return all_passed
 
 
-def check_model_api(base_url: str, api_key: str, model_name: str) -> bool:
-    """
-    Check if the model API is accessible and the specified model exists.
-
-    Checks:
-    1. Network connectivity to the API endpoint
-    2. Model exists in the available models list
-
-    Args:
-        base_url: The API base URL
-        model_name: The model name to check
-
-    Returns:
-        True if all checks pass, False otherwise.
-    """
-    print("🔍 Checking model API...")
-    print("-" * 50)
-
-    all_passed = True
-
-    # Check 1: Network connectivity
-    print(f"1. Checking API connectivity ({base_url})...", end=" ")
-    try:
-        # Parse the URL to get host and port
-        parsed = urlparse(base_url)
-
-        # Create OpenAI client
-        client = OpenAI(base_url=base_url, api_key=api_key, timeout=10.0)
-
-        # Try to list models (this tests connectivity)
-        models_response = client.models.list()
-        available_models = [model.id for model in models_response.data]
-
-        print("✅ OK")
-
-        # Check 2: Model exists
-        print(f"2. Checking model '{model_name}'...", end=" ")
-        if model_name in available_models:
-            print("✅ OK")
-        else:
-            print("❌ FAILED")
-            print(f"   Error: Model '{model_name}' not found.")
-            print(f"   Available models:")
-            for m in available_models[:10]:  # Show first 10 models
-                print(f"     - {m}")
-            if len(available_models) > 10:
-                print(f"     ... and {len(available_models) - 10} more")
-            all_passed = False
-
-    except Exception as e:
-        print("❌ FAILED")
-        error_msg = str(e)
-
-        # Provide more specific error messages
-        if "Connection refused" in error_msg or "Connection error" in error_msg:
-            print(f"   Error: Cannot connect to {base_url}")
-            print("   Solution:")
-            print("     1. Check if the model server is running")
-            print("     2. Verify the base URL is correct")
-            print(f"     3. Try: curl {base_url}/models")
-        elif "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
-            print(f"   Error: Connection to {base_url} timed out")
-            print("   Solution:")
-            print("     1. Check your network connection")
-            print("     2. Verify the server is responding")
-        elif (
-            "Name or service not known" in error_msg
-            or "nodename nor servname" in error_msg
-        ):
-            print(f"   Error: Cannot resolve hostname")
-            print("   Solution:")
-            print("     1. Check the URL is correct")
-            print("     2. Verify DNS settings")
-        else:
-            print(f"   Error: {error_msg}")
-
-        all_passed = False
-
-    print("-" * 50)
-
-    if all_passed:
-        print("✅ Model API checks passed!\n")
-    else:
-        print("❌ Model API check failed. Please fix the issues above.")
-
-    return all_passed
-
-
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description="Phone Agent iOS - AI-powered iOS phone automation",
@@ -275,32 +185,16 @@ Examples:
     # List supported apps
     python ios.py --list-apps
 
+    # Read the accessibility tree on every step
+    python ios.py --accessibility on
+
     # Run a specific task
     python ios.py "Open Safari and search for iPhone tips"
         """,
     )
 
     # Model options
-    parser.add_argument(
-        "--base-url",
-        type=str,
-        default=os.getenv("PHONE_AGENT_BASE_URL", "http://localhost:8000/v1"),
-        help="Model API base URL",
-    )
-
-    parser.add_argument(
-        "--api-key",
-        type=str,
-        default="EMPTY",
-        help="Model API KEY",
-    )
-
-    parser.add_argument(
-        "--model",
-        type=str,
-        default=os.getenv("PHONE_AGENT_MODEL", "autoglm-phone-9b"),
-        help="Model name",
-    )
+    add_model_arguments(parser)
 
     parser.add_argument(
         "--max-steps",
@@ -352,10 +246,21 @@ Examples:
 
     parser.add_argument(
         "--lang",
-        type=str,
+        type=str.lower,
         choices=["cn", "en"],
-        default=os.getenv("PHONE_AGENT_LANG", "cn"),
+        default=os.getenv("PHONE_AGENT_LANG", "cn").lower(),
         help="Language for system prompt (cn or en, default: cn)",
+    )
+
+    parser.add_argument(
+        "--accessibility",
+        type=str.lower,
+        choices=["auto", "on", "off"],
+        default=os.getenv("PHONE_AGENT_ACCESSIBILITY", "auto").lower(),
+        help=(
+            "When to read the accessibility tree: auto (only if the screenshot "
+            "is unavailable), on (every step), off (never). Default: auto"
+        ),
     )
 
     parser.add_argument(
@@ -365,7 +270,16 @@ Examples:
         help="Task to execute (interactive mode if not provided)",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.accessibility:
+        args.accessibility = args.accessibility.lower()
+    if args.accessibility not in {"auto", "on", "off"}:
+        parser.error("--accessibility must be one of: auto, on, off")
+    if args.lang:
+        args.lang = args.lang.lower()
+    if args.lang not in {"cn", "en"}:
+        parser.error("--lang must be one of: cn, en")
+    return args
 
 
 def handle_device_commands(args) -> bool:
@@ -443,107 +357,122 @@ def handle_device_commands(args) -> bool:
     return False
 
 
-def main():
+def main(argv: list[str] | None = None) -> None:
     """Main entry point."""
-    args = parse_args()
+    agent = None
+    model_client = None
 
-    # Handle --list-apps (no system check needed)
-    if args.list_apps:
-        print("Supported iOS apps:")
-        print("\nNote: For iOS apps, Bundle IDs are configured in:")
-        print("  phone_agent/config/apps_ios.py")
-        print("\nCurrently configured apps:")
-        for app in sorted(list_supported_apps()):
-            print(f"  - {app}")
-        print(
-            "\nTo add iOS apps, find the Bundle ID and add to APP_PACKAGES_IOS dictionary."
+    try:
+        args = parse_args(argv)
+
+        # Handle --list-apps (no system check needed)
+        if args.list_apps:
+            print("Supported iOS apps:")
+            print("\nNote: For iOS apps, Bundle IDs are configured in:")
+            print("  phone_agent/config/apps_ios.py")
+            print("\nCurrently configured apps:")
+            for app in sorted(list_supported_apps()):
+                print(f"  - {app}")
+            print(
+                "\nTo add iOS apps, find the Bundle ID and add to APP_PACKAGES_IOS dictionary."
+            )
+            return
+
+        # Handle device commands (these may need partial system checks)
+        if handle_device_commands(args):
+            return
+
+        # Validate model configuration before accessing devices.
+        model_config = resolve_model_config(args, lang=args.lang)
+
+        # Run system requirements check before proceeding
+        if not check_system_requirements(wda_url=args.wda_url):
+            sys.exit(1)
+
+        model_client = ModelClient(model_config, verbose=not args.quiet)
+        model_client.check_connection()
+
+        agent_config = IOSAgentConfig(
+            max_steps=args.max_steps,
+            wda_url=args.wda_url,
+            device_id=args.device_id,
+            verbose=not args.quiet,
+            lang=args.lang,
+            accessibility=args.accessibility,
         )
-        return
+        agent = IOSPhoneAgent(
+            model_config=model_config,
+            agent_config=agent_config,
+            model_client=model_client,
+        )
 
-    # Handle device commands (these may need partial system checks)
-    if handle_device_commands(args):
-        return
+        # Print header
+        print("=" * 50)
+        print("Phone Agent iOS - AI-powered iOS automation")
+        print("=" * 50)
+        print(f"Provider: {model_config.provider}")
+        print(f"Tool Mode: {model_config.tool_mode}")
+        print(f"Model: {model_config.model_name}")
+        print(f"Base URL: {model_config.base_url}")
+        print(f"WDA URL: {args.wda_url}")
+        print(f"Max Steps: {agent_config.max_steps}")
+        print(f"Language: {agent_config.lang}")
+        print(f"Accessibility: {agent_config.accessibility}")
 
-    # Run system requirements check before proceeding
-    if not check_system_requirements(wda_url=args.wda_url):
-        sys.exit(1)
+        # Show device info
+        devices = list_devices()
+        if agent_config.device_id:
+            print(f"Device: {agent_config.device_id}")
+        elif devices:
+            device = devices[0]
+            print(f"Device: {device.device_name or device.device_id[:16]}")
+            print(f"        {device.model}, iOS {device.ios_version}")
 
-    # Check model API connectivity and model availability
-    # if not check_model_api(args.base_url, args.api_key, args.model):
-    #     sys.exit(1)
+        print("=" * 50)
 
-    # Create configurations
-    model_config = ModelConfig(
-        base_url=args.base_url,
-        model_name=args.model,
-        api_key=args.api_key
-    )
+        # Run with provided task or enter interactive mode
+        if args.task:
+            print(f"\nTask: {args.task}\n")
+            result = agent.run(args.task)
+            print(f"\nResult: {result}")
+        else:
+            print("\nEntering interactive mode. Type 'quit' to exit.\n")
 
-    agent_config = IOSAgentConfig(
-        max_steps=args.max_steps,
-        wda_url=args.wda_url,
-        device_id=args.device_id,
-        verbose=not args.quiet,
-        lang=args.lang,
-    )
+            while True:
+                try:
+                    task = input("Enter your task: ").strip()
 
-    # Create iOS agent
-    agent = IOSPhoneAgent(
-        model_config=model_config,
-        agent_config=agent_config,
-    )
+                    if task.lower() in ("quit", "exit", "q"):
+                        print("Goodbye!")
+                        break
 
-    # Print header
-    print("=" * 50)
-    print("Phone Agent iOS - AI-powered iOS automation")
-    print("=" * 50)
-    print(f"Model: {model_config.model_name}")
-    print(f"Base URL: {model_config.base_url}")
-    print(f"WDA URL: {args.wda_url}")
-    print(f"Max Steps: {agent_config.max_steps}")
-    print(f"Language: {agent_config.lang}")
+                    if not task:
+                        continue
 
-    # Show device info
-    devices = list_devices()
-    if agent_config.device_id:
-        print(f"Device: {agent_config.device_id}")
-    elif devices:
-        device = devices[0]
-        print(f"Device: {device.device_name or device.device_id[:16]}")
-        print(f"        {device.model}, iOS {device.ios_version}")
+                    print()
+                    result = agent.run(task)
+                    print(f"\nResult: {result}\n")
+                    agent.reset()
 
-    print("=" * 50)
-
-    # Run with provided task or enter interactive mode
-    if args.task:
-        print(f"\nTask: {args.task}\n")
-        result = agent.run(args.task)
-        print(f"\nResult: {result}")
-    else:
-        # Interactive mode
-        print("\nEntering interactive mode. Type 'quit' to exit.\n")
-
-        while True:
-            try:
-                task = input("Enter your task: ").strip()
-
-                if task.lower() in ("quit", "exit", "q"):
-                    print("Goodbye!")
+                except EOFError:
+                    print("\nGoodbye!")
                     break
-
-                if not task:
-                    continue
-
-                print()
-                result = agent.run(task)
-                print(f"\nResult: {result}\n")
-                agent.reset()
-
-            except KeyboardInterrupt:
-                print("\n\nInterrupted. Goodbye!")
-                break
-            except Exception as e:
-                print(f"\nError: {e}\n")
+                except KeyboardInterrupt:
+                    print("\n\nInterrupted. Goodbye!")
+                    break
+                except Exception as e:
+                    print(f"\nError: {e}\n")
+                    raise
+    except KeyboardInterrupt:
+        print("\n\nInterrupted. Goodbye!")
+        raise
+    finally:
+        try:
+            if agent is not None:
+                agent.close()
+        finally:
+            if model_client is not None:
+                model_client.close()
 
 
 if __name__ == "__main__":

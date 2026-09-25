@@ -12,6 +12,7 @@ from phone_agent.hdc.device import (
     back,
     double_tap,
     get_current_app,
+    get_ui_tree,
     home,
     launch_app,
     long_press,
@@ -36,6 +37,7 @@ __all__ = [
     "restore_keyboard",
     # Device control
     "get_current_app",
+    "get_ui_tree",
     "tap",
     "swipe",
     "back",

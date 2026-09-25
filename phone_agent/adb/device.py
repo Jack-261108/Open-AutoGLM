@@ -26,7 +26,8 @@ def get_current_app(device_id: str | None = None) -> str:
     )
     output = result.stdout
     if not output:
-        raise ValueError("No output from dumpsys window")
+        error_detail = result.stderr.strip() if result.stderr else "Empty output"
+        raise ValueError(f"No output from dumpsys window: {error_detail}")
 
     # Parse window focus info
     for line in output.split("\n"):
@@ -36,6 +37,51 @@ def get_current_app(device_id: str | None = None) -> str:
                     return app_name
 
     return "System Home"
+
+
+def get_ui_tree(device_id: str | None = None, timeout: int = 10):
+    """Dump the Android accessibility tree. Returns None when dump fails.
+
+    ``/sdcard/window_dump.xml`` is only read after uiautomator reports a new
+    dump. A failed dump leaves the previous file in place.
+    """
+    from phone_agent.accessibility import parse_android_hierarchy
+
+    adb_prefix = _get_adb_prefix(device_id)
+    remote = "/sdcard/window_dump.xml"
+    try:
+        dump = subprocess.run(
+            adb_prefix + ["shell", "uiautomator", "dump", "--compressed", remote],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if dump.returncode != 0:
+        return None
+
+    stdout = dump.stdout or ""
+    if "<hierarchy" in stdout:
+        return parse_android_hierarchy(stdout)
+    if "dumped to" not in f"{stdout}\n{dump.stderr or ''}".lower():
+        return None
+
+    try:
+        cat = subprocess.run(
+            adb_prefix + ["exec-out", "cat", remote],
+            capture_output=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if not cat.stdout:
+        return None
+    raw = cat.stdout.decode("utf-8", errors="replace")
+    if "<hierarchy" not in raw:
+        return None
+    return parse_android_hierarchy(raw)
 
 
 def tap(

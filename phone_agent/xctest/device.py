@@ -456,3 +456,25 @@ def press_button(
         print("Error: requests library required. Install: pip install requests")
     except Exception as e:
         print(f"Error pressing button: {e}")
+
+
+def get_ui_tree(
+    wda_url: str = "http://localhost:8100",
+    session_id: str | None = None,
+    timeout: int = 10,
+):
+    """Read the WebDriverAgent accessibility source. Returns None on failure."""
+    from phone_agent.accessibility import parse_ios_source
+
+    try:
+        import requests
+
+        url = _get_wda_session_url(wda_url, session_id, "source")
+        response = requests.get(
+            url, params={"format": "json"}, timeout=timeout, verify=False
+        )
+        if response.status_code != 200:
+            return None
+        return parse_ios_source(response.json())
+    except Exception:
+        return None

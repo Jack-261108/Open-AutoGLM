@@ -48,6 +48,8 @@ APP_PACKAGES: dict[str, str] = {
     "番茄小说": "com.dragon.read",
     "番茄免费小说": "com.dragon.read",
     "七猫免费小说": "com.kmxs.reader",
+    # Education & Learning
+    "粉笔": "com.fenbi.android.servant",
     # Productivity
     "飞书": "com.ss.android.lark",
     "QQ邮箱": "com.tencent.androidqqmail",

@@ -1,5 +1,6 @@
 """ADB connection management for local and remote devices."""
 
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -7,6 +8,10 @@ from enum import Enum
 from typing import Optional
 
 from phone_agent.config.timing import TIMING_CONFIG
+
+_DEVICE_LINE_PATTERN = re.compile(
+    r"^(?P<device_id>.+?)\s+(?P<status>device|offline|unauthorized|authorizing|connecting|bootloader|recovery|sideload|rescue|no permissions)\b(?:\s+(?P<info>.*))?$"
+)
 
 
 class ConnectionType(Enum):
@@ -137,34 +142,43 @@ class ADBConnection:
                 if not line.strip():
                     continue
 
-                parts = line.split()
-                if len(parts) >= 2:
+                match = _DEVICE_LINE_PATTERN.match(line.strip())
+                if match:
+                    device_id = match.group("device_id").strip()
+                    status = match.group("status").strip()
+                    info = match.group("info") or ""
+                    extra_parts = info.split()
+                else:
+                    parts = line.split()
+                    if len(parts) < 2:
+                        continue
                     device_id = parts[0]
                     status = parts[1]
+                    extra_parts = parts[2:]
 
-                    # Determine connection type
-                    if ":" in device_id:
-                        conn_type = ConnectionType.REMOTE
-                    elif "emulator" in device_id:
-                        conn_type = ConnectionType.USB  # Emulator via USB
-                    else:
-                        conn_type = ConnectionType.USB
+                # Determine connection type
+                if ":" in device_id or "._tcp" in device_id:
+                    conn_type = ConnectionType.REMOTE
+                elif "emulator" in device_id:
+                    conn_type = ConnectionType.USB  # Emulator via USB
+                else:
+                    conn_type = ConnectionType.USB
 
-                    # Parse additional info
-                    model = None
-                    for part in parts[2:]:
-                        if part.startswith("model:"):
-                            model = part.split(":", 1)[1]
-                            break
+                # Parse additional info
+                model = None
+                for part in extra_parts:
+                    if part.startswith("model:"):
+                        model = part.split(":", 1)[1]
+                        break
 
-                    devices.append(
-                        DeviceInfo(
-                            device_id=device_id,
-                            status=status,
-                            connection_type=conn_type,
-                            model=model,
-                        )
+                devices.append(
+                    DeviceInfo(
+                        device_id=device_id,
+                        status=status,
+                        connection_type=conn_type,
+                        model=model,
                     )
+                )
 
             return devices
 

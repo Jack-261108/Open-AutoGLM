@@ -20,6 +20,7 @@ class Screenshot:
     width: int
     height: int
     is_sensitive: bool = False
+    is_fallback: bool = False
 
 
 def get_screenshot(device_id: str | None = None, timeout: int = 10) -> Screenshot:
@@ -106,4 +107,5 @@ def _create_fallback_screenshot(is_sensitive: bool) -> Screenshot:
         width=default_width,
         height=default_height,
         is_sensitive=is_sensitive,
+        is_fallback=True,
     )

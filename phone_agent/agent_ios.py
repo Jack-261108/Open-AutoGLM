@@ -1,47 +1,29 @@
 """iOS PhoneAgent class for orchestrating iOS phone automation."""
 
-import json
-import traceback
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from phone_agent.actions.handler import do, finish, parse_action
+from phone_agent.actions.handler import finish, parse_action
 from phone_agent.actions.handler_ios import IOSActionHandler
-from phone_agent.config import get_messages, get_system_prompt
-from phone_agent.model import ModelClient, ModelConfig
-from phone_agent.model.client import MessageBuilder
+from phone_agent.agent import AgentConfig, PhoneAgent, StepResult
+from phone_agent.device_factory import DeviceType
+from phone_agent.model import ModelClient, ModelClientProtocol, ModelConfig
 from phone_agent.xctest import XCTestConnection, get_current_app, get_screenshot
+
+__all__ = ["IOSPhoneAgent", "IOSAgentConfig", "StepResult"]
 
 
 @dataclass
-class IOSAgentConfig:
+class IOSAgentConfig(AgentConfig):
     """Configuration for the iOS PhoneAgent."""
 
-    max_steps: int = 100
+    device_type: DeviceType = DeviceType.IOS
     wda_url: str = "http://localhost:8100"
     session_id: str | None = None
     device_id: str | None = None  # iOS device UDID
-    lang: str = "cn"
-    system_prompt: str | None = None
-    verbose: bool = True
-
-    def __post_init__(self):
-        if self.system_prompt is None:
-            self.system_prompt = get_system_prompt(self.lang)
 
 
-@dataclass
-class StepResult:
-    """Result of a single agent step."""
-
-    success: bool
-    finished: bool
-    action: dict[str, Any] | None
-    thinking: str
-    message: str | None = None
-
-
-class IOSPhoneAgent:
+class IOSPhoneAgent(PhoneAgent):
     """
     AI-powered agent for automating iOS phone interactions.
 
@@ -53,15 +35,9 @@ class IOSPhoneAgent:
         agent_config: Configuration for the iOS agent behavior.
         confirmation_callback: Optional callback for sensitive action confirmation.
         takeover_callback: Optional callback for takeover requests.
-
-    Example:
-        >>> from phone_agent.agent_ios import IOSPhoneAgent, IOSAgentConfig
-        >>> from phone_agent.model import ModelConfig
-        >>>
-        >>> model_config = ModelConfig(base_url="http://localhost:8000/v1")
-        >>> agent_config = IOSAgentConfig(wda_url="http://localhost:8100")
-        >>> agent = IOSPhoneAgent(model_config, agent_config)
-        >>> agent.run("Open Safari and search for Apple")
+        interact_callback: Optional callback for user interaction choices.
+        call_api_callback: Optional callback for external API / summarization calls.
+        model_client: Optional custom model client.
     """
 
     def __init__(
@@ -70,208 +46,76 @@ class IOSPhoneAgent:
         agent_config: IOSAgentConfig | None = None,
         confirmation_callback: Callable[[str], bool] | None = None,
         takeover_callback: Callable[[str], None] | None = None,
+        interact_callback: Callable[[str], str] | None = None,
+        call_api_callback: Callable[[str, list[dict[str, Any]]], str] | None = None,
+        model_client: ModelClientProtocol | None = None,
     ):
-        self.model_config = model_config or ModelConfig()
-        self.agent_config = agent_config or IOSAgentConfig()
-
-        self.model_client = ModelClient(self.model_config)
+        config = agent_config or IOSAgentConfig()
 
         # Initialize WDA connection and create session if needed
-        self.wda_connection = XCTestConnection(wda_url=self.agent_config.wda_url)
+        self.wda_connection = XCTestConnection(wda_url=config.wda_url)
 
         # Auto-create session if not provided
-        if self.agent_config.session_id is None:
+        if config.session_id is None:
             success, session_id = self.wda_connection.start_wda_session()
             if success and session_id != "session_started":
-                self.agent_config.session_id = session_id
-                if self.agent_config.verbose:
+                config.session_id = session_id
+                if config.verbose:
                     print(f"✅ Created WDA session: {session_id}")
-            elif self.agent_config.verbose:
+            elif config.verbose:
                 print(f"⚠️  Using default WDA session (no explicit session ID)")
 
-        self.action_handler = IOSActionHandler(
-            wda_url=self.agent_config.wda_url,
-            session_id=self.agent_config.session_id,
+        # Create model client via module ModelClient if not injected
+        if model_client is None:
+            owned_client = ModelClient(
+                model_config or ModelConfig(), verbose=config.verbose
+            )
+            resolved_client = owned_client
+            owned_ref = owned_client
+        else:
+            resolved_client = model_client
+            owned_ref = None
+
+        super().__init__(
+            model_config=model_config,
+            agent_config=config,
             confirmation_callback=confirmation_callback,
             takeover_callback=takeover_callback,
+            interact_callback=interact_callback,
+            call_api_callback=call_api_callback,
+            model_client=resolved_client,
+        )
+        self._owned_model_client = owned_ref
+
+        # Retain explicit IOSActionHandler instance for backward compatibility
+        self.action_handler = IOSActionHandler(
+            wda_url=config.wda_url,
+            session_id=config.session_id,
+            confirmation_callback=confirmation_callback,
+            takeover_callback=takeover_callback,
+            interact_callback=interact_callback,
+            call_api_callback=call_api_callback,
+            model_client=self.model_client,
+            verbose=config.verbose,
         )
 
-        self._context: list[dict[str, Any]] = []
-        self._step_count = 0
-
-    def run(self, task: str) -> str:
-        """
-        Run the agent to complete a task.
-
-        Args:
-            task: Natural language description of the task.
-
-        Returns:
-            Final message from the agent.
-        """
-        self._context = []
-        self._step_count = 0
-
-        # First step with user prompt
-        result = self._execute_step(task, is_first=True)
-
-        if result.finished:
-            return result.message or "Task completed"
-
-        # Continue until finished or max steps reached
-        while self._step_count < self.agent_config.max_steps:
-            result = self._execute_step(is_first=False)
-
-            if result.finished:
-                return result.message or "Task completed"
-
-        return "Max steps reached"
-
-    def step(self, task: str | None = None) -> StepResult:
-        """
-        Execute a single step of the agent.
-
-        Useful for manual control or debugging.
-
-        Args:
-            task: Task description (only needed for first step).
-
-        Returns:
-            StepResult with step details.
-        """
-        is_first = len(self._context) == 0
-
-        if is_first and not task:
-            raise ValueError("Task is required for the first step")
-
-        return self._execute_step(task, is_first)
-
-    def reset(self) -> None:
-        """Reset the agent state for a new task."""
-        self._context = []
-        self._step_count = 0
-
-    def _execute_step(
-        self, user_prompt: str | None = None, is_first: bool = False
-    ) -> StepResult:
-        """Execute a single step of the agent loop."""
-        self._step_count += 1
-
-        # Capture current screen state
+    def _capture_screen_and_app(self) -> tuple[Any, str, str]:
+        """Capture screenshot and current app (preserves agent_ios module monkeypatches)."""
         screenshot = get_screenshot(
             wda_url=self.agent_config.wda_url,
             session_id=self.agent_config.session_id,
             device_id=self.agent_config.device_id,
         )
         current_app = get_current_app(
-            wda_url=self.agent_config.wda_url, session_id=self.agent_config.session_id
+            wda_url=self.agent_config.wda_url,
+            session_id=self.agent_config.session_id,
         )
+        return screenshot, current_app, self._capture_ui_text(screenshot)
 
-        # Build messages
-        if is_first:
-            self._context.append(
-                MessageBuilder.create_system_message(self.agent_config.system_prompt)
-            )
+    def _parse_model_action(self, response: Any) -> Any:
+        """Parse action using module-scoped parse_action."""
+        return response.parsed_action or parse_action(response.action)
 
-            screen_info = MessageBuilder.build_screen_info(current_app)
-            text_content = f"{user_prompt}\n\n{screen_info}"
-
-            self._context.append(
-                MessageBuilder.create_user_message(
-                    text=text_content, image_base64=screenshot.base64_data
-                )
-            )
-        else:
-            screen_info = MessageBuilder.build_screen_info(current_app)
-            text_content = f"** Screen Info **\n\n{screen_info}"
-
-            self._context.append(
-                MessageBuilder.create_user_message(
-                    text=text_content, image_base64=screenshot.base64_data
-                )
-            )
-
-        # Get model response
-        try:
-            response = self.model_client.request(self._context)
-        except Exception as e:
-            if self.agent_config.verbose:
-                traceback.print_exc()
-            return StepResult(
-                success=False,
-                finished=True,
-                action=None,
-                thinking="",
-                message=f"Model error: {e}",
-            )
-
-        # Parse action from response
-        try:
-            action = parse_action(response.action)
-        except ValueError:
-            if self.agent_config.verbose:
-                traceback.print_exc()
-            action = finish(message=response.action)
-
-        if self.agent_config.verbose:
-            # Print thinking process
-            msgs = get_messages(self.agent_config.lang)
-            print("\n" + "=" * 50)
-            print(f"💭 {msgs['thinking']}:")
-            print("-" * 50)
-            print(response.thinking)
-            print("-" * 50)
-            print(f"🎯 {msgs['action']}:")
-            print(json.dumps(action, ensure_ascii=False, indent=2))
-            print("=" * 50 + "\n")
-
-        # Remove image from context to save space
-        self._context[-1] = MessageBuilder.remove_images_from_message(self._context[-1])
-
-        # Execute action
-        try:
-            result = self.action_handler.execute(
-                action, screenshot.width, screenshot.height
-            )
-        except Exception as e:
-            if self.agent_config.verbose:
-                traceback.print_exc()
-            result = self.action_handler.execute(
-                finish(message=str(e)), screenshot.width, screenshot.height
-            )
-
-        # Add assistant response to context
-        self._context.append(
-            MessageBuilder.create_assistant_message(
-                f"<think>{response.thinking}</think><answer>{response.action}</answer>"
-            )
-        )
-
-        # Check if finished
-        finished = action.get("_metadata") == "finish" or result.should_finish
-
-        if finished and self.agent_config.verbose:
-            msgs = get_messages(self.agent_config.lang)
-            print("\n" + "🎉 " + "=" * 48)
-            print(
-                f"✅ {msgs['task_completed']}: {result.message or action.get('message', msgs['done'])}"
-            )
-            print("=" * 50 + "\n")
-
-        return StepResult(
-            success=result.success,
-            finished=finished,
-            action=action,
-            thinking=response.thinking,
-            message=result.message or action.get("message"),
-        )
-
-    @property
-    def context(self) -> list[dict[str, Any]]:
-        """Get the current conversation context."""
-        return self._context.copy()
-
-    @property
-    def step_count(self) -> int:
-        """Get the current step count."""
-        return self._step_count
+    def _fallback_finish(self, err: str) -> Any:
+        """Create fallback finish using module-scoped finish."""
+        return finish(message=err)
