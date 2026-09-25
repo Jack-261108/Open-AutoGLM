@@ -1,219 +1,321 @@
-"""Model client for AI inference using OpenAI-compatible API."""
+"""Provider-neutral model client facade and message helpers."""
 
+from __future__ import annotations
+
+import copy
 import json
+import math
 import time
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass, field, replace
+from urllib.parse import urlsplit
+from typing import Any, Literal
 
-from openai import OpenAI
+from phone_agent.model.base import (
+    ModelAdapter,
+    ModelConfigurationError,
+    ModelConnectionError,
+    ModelRequestError,
+    UnsupportedToolsError,
+)
+from phone_agent.model.response_parser import parse_model_output
 
-from phone_agent.config.i18n import get_message
+Provider = Literal["openai", "anthropic", "ollama"]
+ToolMode = Literal["auto", "native", "text"]
+
+_PROVIDER_DEFAULT_URLS: dict[str, str] = {
+    "openai": "http://localhost:8000/v1",
+    "anthropic": "https://api.anthropic.com",
+    "ollama": "http://localhost:11434",
+}
+_OPENAI_DEFAULT_MODEL = "autoglm-phone-9b"
+_ADAPTER_IMPORTS: dict[str, tuple[str, str]] = {
+    "openai": (
+        "phone_agent.model.openai_compatible",
+        "OpenAICompatibleAdapter",
+    ),
+    "anthropic": ("phone_agent.model.anthropic", "AnthropicAdapter"),
+    "ollama": ("phone_agent.model.ollama", "OllamaAdapter"),
+}
+_COMMON_RESERVED_BODY_FIELDS = frozenset(
+    ("model", "messages", "tools", "tool_choice", "stream")
+)
+_PROVIDER_RESERVED_BODY_FIELDS: dict[str, frozenset[str]] = {
+    "openai": frozenset(
+        ("max_tokens", "temperature", "top_p", "frequency_penalty")
+    ),
+    "anthropic": frozenset(("max_tokens", "temperature", "top_p", "system")),
+    "ollama": frozenset(),
+}
+_OLLAMA_RESERVED_OPTION_FIELDS = frozenset(
+    ("num_predict", "temperature", "top_p")
+)
+
+
+def _validate_optional_number(name: str, value: float | None) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ModelConfigurationError(f"{name} must be a number or None")
+    if not math.isfinite(value):
+        raise ModelConfigurationError(f"{name} must be finite")
+
+
+def validate_extra_body(provider: str, extra_body: object) -> None:
+    """Reject provider request fields owned by the facade or adapter."""
+
+    if provider not in _PROVIDER_DEFAULT_URLS:
+        raise ModelConfigurationError(f"Unknown provider: {provider!r}")
+    if not isinstance(extra_body, dict):
+        raise ModelConfigurationError("extra_body must be a dictionary")
+    if any(not isinstance(key, str) for key in extra_body):
+        raise ModelConfigurationError("extra_body keys must be strings")
+
+    reserved = _COMMON_RESERVED_BODY_FIELDS | _PROVIDER_RESERVED_BODY_FIELDS[provider]
+    conflicts = set(extra_body) & reserved
+    if conflicts:
+        raise ModelConfigurationError(
+            f"extra_body cannot override reserved fields: {sorted(conflicts)!r}"
+        )
+
+    if provider != "ollama":
+        return
+    if "options" not in extra_body:
+        return
+    options = extra_body["options"]
+    if not isinstance(options, dict):
+        raise ModelConfigurationError("Ollama extra_body.options must be a dictionary")
+    if any(not isinstance(key, str) for key in options):
+        raise ModelConfigurationError("Ollama extra_body.options keys must be strings")
+    option_conflicts = set(options) & _OLLAMA_RESERVED_OPTION_FIELDS
+    if option_conflicts:
+        raise ModelConfigurationError(
+            "Ollama extra_body.options cannot override generated fields: "
+            f"{sorted(option_conflicts)!r}"
+        )
 
 
 @dataclass
 class ModelConfig:
-    """Configuration for the AI model."""
+    """Configuration shared by all model providers.
 
-    base_url: str = "http://localhost:8000/v1"
-    api_key: str = "EMPTY"
-    model_name: str = "autoglm-phone-9b"
-    max_tokens: int = 3000
-    temperature: float = 0.0
-    top_p: float = 0.85
-    frequency_penalty: float = 0.2
+    The first nine fields retain their historical order so existing positional
+    construction keeps the same meaning. Provider-specific fields are appended.
+    """
+
+    base_url: str | None = None
+    api_key: str | None = field(default=None, repr=False)
+    model_name: str | None = None
+    max_tokens: int = 2048
+    temperature: float | None = None
+    top_p: float | None = None
+    frequency_penalty: float | None = None
     extra_body: dict[str, Any] = field(default_factory=dict)
     lang: str = "cn"  # Language for UI messages: 'cn' or 'en'
+    provider: Provider = "openai"
+    tool_mode: ToolMode = "auto"
+    timeout: float = 120.0
+    extra_headers: dict[str, str] | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.provider, str) or self.provider not in _PROVIDER_DEFAULT_URLS:
+            raise ModelConfigurationError(
+                "provider must be one of: openai, anthropic, ollama"
+            )
+        if not isinstance(self.tool_mode, str) or self.tool_mode not in {
+            "auto",
+            "native",
+            "text",
+        }:
+            raise ModelConfigurationError(
+                "tool_mode must be one of: auto, native, text"
+            )
+
+        if self.base_url is None:
+            self.base_url = _PROVIDER_DEFAULT_URLS[self.provider]
+        elif not isinstance(self.base_url, str) or not self.base_url.strip():
+            raise ModelConfigurationError("base_url must be a non-empty string or None")
+        self.base_url = self.base_url.strip().rstrip("/")
+        if not self.base_url:
+            raise ModelConfigurationError("base_url must not contain only slashes")
+        parsed_url = urlsplit(self.base_url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
+            raise ModelConfigurationError(
+                "base_url must be an absolute http or https URL with a hostname"
+            )
+        if parsed_url.username is not None or parsed_url.password is not None:
+            raise ModelConfigurationError(
+                "base_url must not contain credentials; use api_key or extra_headers"
+            )
+
+        if self.model_name is None:
+            if self.provider == "openai":
+                self.model_name = _OPENAI_DEFAULT_MODEL
+            else:
+                raise ModelConfigurationError(
+                    f"model_name is required for provider {self.provider!r}"
+                )
+        elif not isinstance(self.model_name, str) or not self.model_name.strip():
+            raise ModelConfigurationError("model_name must be a non-empty string or None")
+        else:
+            self.model_name = self.model_name.strip()
+
+        if self.api_key is not None and not isinstance(self.api_key, str):
+            raise ModelConfigurationError("api_key must be a string or None")
+        if self.provider == "anthropic":
+            if (
+                not self.api_key
+                or not self.api_key.strip()
+                or self.api_key.strip() == "EMPTY"
+            ):
+                raise ModelConfigurationError(
+                    "Anthropic requires a non-empty api_key other than 'EMPTY'"
+                )
+        elif self.provider == "ollama" and self.api_key and self.api_key.strip():
+            raise ModelConfigurationError(
+                "Ollama does not use api_key; use extra_headers for proxy authentication"
+            )
+
+        if type(self.max_tokens) is not int or self.max_tokens <= 0:
+            raise ModelConfigurationError("max_tokens must be a positive integer")
+        _validate_optional_number("temperature", self.temperature)
+        _validate_optional_number("top_p", self.top_p)
+        _validate_optional_number("frequency_penalty", self.frequency_penalty)
+        if self.temperature is not None and self.temperature < 0:
+            raise ModelConfigurationError("temperature must be greater than or equal to 0")
+        if self.top_p is not None and not 0 <= self.top_p <= 1:
+            raise ModelConfigurationError("top_p must be between 0 and 1")
+        if (
+            self.provider in {"anthropic", "ollama"}
+            and self.frequency_penalty not in {None, 0.0}
+        ):
+            raise ModelConfigurationError(
+                f"frequency_penalty is not supported by provider {self.provider!r}"
+            )
+
+        if isinstance(self.timeout, bool) or not isinstance(self.timeout, (int, float)):
+            raise ModelConfigurationError("timeout must be a positive number")
+        if not math.isfinite(self.timeout) or self.timeout <= 0:
+            raise ModelConfigurationError("timeout must be a positive finite number")
+
+        if not isinstance(self.extra_body, dict):
+            raise ModelConfigurationError("extra_body must be a dictionary")
+        self.extra_body = copy.deepcopy(self.extra_body)
+        validate_extra_body(self.provider, self.extra_body)
+
+        if self.extra_headers is not None:
+            if not isinstance(self.extra_headers, dict) or any(
+                not isinstance(key, str) or not isinstance(value, str)
+                for key, value in self.extra_headers.items()
+            ):
+                raise ModelConfigurationError(
+                    "extra_headers must be a dictionary of string keys and values"
+                )
+            self.extra_headers = dict(self.extra_headers)
 
 
 @dataclass
 class ModelResponse:
-    """Response from the AI model."""
+    """Parsed response returned by the compatibility facade."""
 
     thinking: str
     action: str
     raw_content: str
-    # Performance metrics
-    time_to_first_token: float | None = None  # Time to first token (seconds)
-    time_to_thinking_end: float | None = None  # Time to thinking end (seconds)
-    total_time: float | None = None  # Total inference time (seconds)
+    time_to_first_token: float | None = None
+    time_to_thinking_end: float | None = None
+    total_time: float | None = None
+    parsed_action: dict[str, Any] | None = None
+
+
+def _default_adapter_factory(config: ModelConfig, verbose: bool) -> ModelAdapter:
+    module_name, class_name = _ADAPTER_IMPORTS[config.provider]
+    try:
+        module = __import__(module_name, fromlist=[class_name])
+        adapter_class = getattr(module, class_name)
+    except (ImportError, AttributeError) as exc:
+        raise ModelConfigurationError(
+            f"Adapter implementation for provider {config.provider!r} is not available"
+        ) from exc
+    return adapter_class(config, verbose=verbose)
 
 
 class ModelClient:
-    """
-    Client for interacting with OpenAI-compatible vision-language models.
+    """Compatibility facade that selects tools and parses adapter output."""
 
-    Args:
-        config: Model configuration.
-    """
-
-    def __init__(self, config: ModelConfig | None = None):
+    def __init__(
+        self,
+        config: ModelConfig | None = None,
+        verbose: bool = True,
+        *,
+        adapter: ModelAdapter | None = None,
+    ):
         self.config = config or ModelConfig()
-        self.client = OpenAI(base_url=self.config.base_url, api_key=self.config.api_key)
+        self.verbose = verbose
+        self.adapter = (
+            adapter
+            if adapter is not None
+            else _default_adapter_factory(self.config, verbose)
+        )
+        self._closed = False
+
+    def _ensure_open_for_request(self) -> None:
+        if self._closed:
+            raise ModelRequestError("ModelClient is closed")
 
     def request(self, messages: list[dict[str, Any]]) -> ModelResponse:
-        """
-        Send a request to the model.
+        """Request one action, applying the configured tool fallback policy."""
 
-        Args:
-            messages: List of message dictionaries in OpenAI format.
+        self._ensure_open_for_request()
+        if self.config.tool_mode == "text":
+            raw_output = self.adapter.request(messages, use_tools=False)
+        elif self.config.tool_mode == "native":
+            raw_output = self.adapter.request(messages, use_tools=True)
+        else:
+            first_attempt_started = time.monotonic()
+            try:
+                raw_output = self.adapter.request(messages, use_tools=True)
+            except UnsupportedToolsError:
+                first_attempt_time = time.monotonic() - first_attempt_started
+                fallback_output = self.adapter.request(messages, use_tools=False)
+                raw_output = replace(
+                    fallback_output,
+                    time_to_first_token=(
+                        None
+                        if fallback_output.time_to_first_token is None
+                        else first_attempt_time + fallback_output.time_to_first_token
+                    ),
+                    time_to_thinking_end=(
+                        None
+                        if fallback_output.time_to_thinking_end is None
+                        else first_attempt_time + fallback_output.time_to_thinking_end
+                    ),
+                    total_time=first_attempt_time + fallback_output.total_time,
+                )
 
-        Returns:
-            ModelResponse containing thinking and action.
-
-        Raises:
-            ValueError: If the response cannot be parsed.
-        """
-        # Start timing
-        start_time = time.time()
-        time_to_first_token = None
-        time_to_thinking_end = None
-
-        stream = self.client.chat.completions.create(
-            messages=messages,
-            model=self.config.model_name,
-            max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
-            frequency_penalty=self.config.frequency_penalty,
-            extra_body=self.config.extra_body,
-            stream=True,
-        )
-
-        raw_content = ""
-        buffer = ""  # Buffer to hold content that might be part of a marker
-        action_markers = ["finish(message=", "do(action="]
-        in_action_phase = False  # Track if we've entered the action phase
-        first_token_received = False
-
-        for chunk in stream:
-            if len(chunk.choices) == 0:
-                continue
-            if chunk.choices[0].delta.content is not None:
-                content = chunk.choices[0].delta.content
-                raw_content += content
-
-                # Record time to first token
-                if not first_token_received:
-                    time_to_first_token = time.time() - start_time
-                    first_token_received = True
-
-                if in_action_phase:
-                    # Already in action phase, just accumulate content without printing
-                    continue
-
-                buffer += content
-
-                # Check if any marker is fully present in buffer
-                marker_found = False
-                for marker in action_markers:
-                    if marker in buffer:
-                        # Marker found, print everything before it
-                        thinking_part = buffer.split(marker, 1)[0]
-                        print(thinking_part, end="", flush=True)
-                        print()  # Print newline after thinking is complete
-                        in_action_phase = True
-                        marker_found = True
-
-                        # Record time to thinking end
-                        if time_to_thinking_end is None:
-                            time_to_thinking_end = time.time() - start_time
-
-                        break
-
-                if marker_found:
-                    continue  # Continue to collect remaining content
-
-                # Check if buffer ends with a prefix of any marker
-                # If so, don't print yet (wait for more content)
-                is_potential_marker = False
-                for marker in action_markers:
-                    for i in range(1, len(marker)):
-                        if buffer.endswith(marker[:i]):
-                            is_potential_marker = True
-                            break
-                    if is_potential_marker:
-                        break
-
-                if not is_potential_marker:
-                    # Safe to print the buffer
-                    print(buffer, end="", flush=True)
-                    buffer = ""
-
-        # Calculate total time
-        total_time = time.time() - start_time
-
-        # Parse thinking and action from response
-        thinking, action = self._parse_response(raw_content)
-
-        # Print performance metrics
-        lang = self.config.lang
-        print()
-        print("=" * 50)
-        print(f"⏱️  {get_message('performance_metrics', lang)}:")
-        print("-" * 50)
-        if time_to_first_token is not None:
-            print(
-                f"{get_message('time_to_first_token', lang)}: {time_to_first_token:.3f}s"
-            )
-        if time_to_thinking_end is not None:
-            print(
-                f"{get_message('time_to_thinking_end', lang)}:        {time_to_thinking_end:.3f}s"
-            )
-        print(
-            f"{get_message('total_inference_time', lang)}:          {total_time:.3f}s"
-        )
-        print("=" * 50)
-
+        parsed = parse_model_output(raw_output)
         return ModelResponse(
-            thinking=thinking,
-            action=action,
-            raw_content=raw_content,
-            time_to_first_token=time_to_first_token,
-            time_to_thinking_end=time_to_thinking_end,
-            total_time=total_time,
+            thinking=parsed.thinking,
+            action=parsed.action,
+            raw_content=parsed.raw_content,
+            time_to_first_token=raw_output.time_to_first_token,
+            time_to_thinking_end=raw_output.time_to_thinking_end,
+            total_time=raw_output.total_time,
+            parsed_action=parsed.parsed_action,
         )
 
-    def _parse_response(self, content: str) -> tuple[str, str]:
-        """
-        Parse the model response into thinking and action parts.
+    def check_connection(self) -> None:
+        """Delegate the provider-specific connection check."""
 
-        Parsing rules:
-        1. If content contains 'finish(message=', everything before is thinking,
-           everything from 'finish(message=' onwards is action.
-        2. If rule 1 doesn't apply but content contains 'do(action=',
-           everything before is thinking, everything from 'do(action=' onwards is action.
-        3. Fallback: If content contains '<answer>', use legacy parsing with XML tags.
-        4. Otherwise, return empty thinking and full content as action.
+        if self._closed:
+            raise ModelConnectionError("ModelClient is closed")
+        self.adapter.check_connection()
 
-        Args:
-            content: Raw response content.
+    def close(self) -> None:
+        """Close the adapter exactly once."""
 
-        Returns:
-            Tuple of (thinking, action).
-        """
-        # Rule 1: Check for finish(message=
-        if "finish(message=" in content:
-            parts = content.split("finish(message=", 1)
-            thinking = parts[0].strip()
-            action = "finish(message=" + parts[1]
-            return thinking, action
-
-        # Rule 2: Check for do(action=
-        if "do(action=" in content:
-            parts = content.split("do(action=", 1)
-            thinking = parts[0].strip()
-            action = "do(action=" + parts[1]
-            return thinking, action
-
-        # Rule 3: Fallback to legacy XML tag parsing
-        if "<answer>" in content:
-            parts = content.split("<answer>", 1)
-            thinking = parts[0].replace("<think>", "").replace("</think>", "").strip()
-            action = parts[1].replace("</answer>", "").strip()
-            return thinking, action
-
-        # Rule 4: No markers found, return content as action
-        return "", content
+        if self._closed:
+            return
+        self.adapter.close()
+        self._closed = True
 
 
 class MessageBuilder:

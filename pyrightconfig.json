@@ -1,0 +1,21 @@
+{
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Darwin",
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": [
+    ".",
+    "phone_agent"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/*.egg-info",
+    ".git",
+    ".idea",
+    "resources", "**/node_modules", "**/.*"
+  ],
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "typeCheckingMode": "basic",
+  "useLibraryCodeForTypes": true
+}

@@ -32,6 +32,8 @@ setup(
     install_requires=[
         "Pillow>=12.0.0",
         "openai>=2.9.0",
+        "anthropic>=0.117.1",
+        "httpx>=0.28.1",
     ],
     extras_require={
         "dev": [
