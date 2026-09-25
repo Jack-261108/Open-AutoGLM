@@ -129,6 +129,14 @@ adb disconnect <ip>:<port>
 
 ## Usage
 
+### Model Providers
+
+`provider` supports `openai` (OpenAI-compatible Chat Completions), `anthropic` (Anthropic Messages), and `ollama` (native `/api/chat`). The default is `openai`.
+
+The selected model must support image input because every Agent step includes a phone screenshot. Protocol support does not imply that every service or model has passed a real-device smoke test; verify your chosen endpoint and vision model before deployment.
+
+`--tool-mode` controls action output: `auto` first tries native tools and conservatively falls back to text when the service explicitly rejects tools, `native` requires native tool calling, and `text` uses the existing DSL/XML/JSON text format. For Ollama models without tool support, select `text` explicitly.
+
 ### Command Line
 
 ```bash

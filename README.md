@@ -194,6 +194,8 @@ python main.py --base-url https://open.bigmodel.cn/api/paas/v4 --model "autoglm-
 python main.py --base-url https://api-inference.modelscope.cn/v1 --model "ZhipuAI/AutoGLM-Phone-9B" --apikey "your-modelscope-api-key" "打开美团搜索附近的火锅店"
 ```
 
+> 💡 上述第三方服务均使用 OpenAI Chat Completions 兼容协议，默认 `--provider openai` 即可接入。还可以接入任何 OpenAI 兼容服务(如 DashScope、自定义 vLLM/SGLang 服务)。其它协议(Anthropic Messages、Ollama)的接入方式见下方[多模型供应商](#多模型供应商)章节。
+
 #### 选项 B: 自行部署模型
 
 如果你希望在本地或自己的服务器上部署模型：
@@ -323,6 +325,26 @@ python main.py --list-apps
 python main.py --device-type hdc --list-apps
 ```
 
+#### iOS 设备
+
+iOS 设备既可以通过 `--device-type ios` 走统一的 `main.py` 入口，也可以使用专用的 `ios.py` 入口：
+
+```bash
+# iOS 设备 - 指定任务
+python ios.py --base-url http://localhost:8000/v1 --model "autoglm-phone-9b" "Open Safari and search for iPhone tips"
+
+# iOS 设备 - 指定 WDA 地址（WiFi 调试时）
+python ios.py --wda-url http://192.168.1.100:8100
+
+# 列出已连接的 iOS 设备
+python ios.py --list-devices
+
+# 查看 WebDriverAgent 状态
+python ios.py --wda-status
+```
+
+iOS 设备的环境准备参考 [iOS 环境配置指南](docs/ios_setup/ios_setup.md)。
+
 ### Python API
 
 ```python
@@ -338,10 +360,120 @@ model_config = ModelConfig(
 # 创建 Agent
 agent = PhoneAgent(model_config=model_config)
 
-# 执行任务
-result = agent.run("打开淘宝搜索无线耳机")
-print(result)
+try:
+    # 执行任务
+    result = agent.run("打开淘宝搜索无线耳机")
+    print(result)
+finally:
+    # 显式释放模型客户端和设备连接
+    agent.close()
 ```
+
+> ⚠️ `PhoneAgent` 内部会持有模型客户端和设备句柄，建议使用 `try/finally` 调用 `agent.close()`，避免在长任务或异常路径下泄漏连接。如果你通过 `model_client=` 注入了自定义客户端，`agent.close()` 不会关闭它，需由调用方自行管理。
+
+## 多模型供应商
+
+除了默认的 `openai`(OpenAI Chat Completions 兼容)协议外，本项目还支持以下两类供应商协议，可通过 `--provider` 显式切换，不通过 URL 或模型名猜测：
+
+| provider | 协议 | 适用场景 |
+|---|---|---|
+| `openai` (默认) | OpenAI Chat Completions | AutoGLM 系列模型、智谱 BigModel、ModelScope、DashScope gui-plus、本地 vLLM/SGLang、其它 OpenAI 兼容服务 |
+| `anthropic` | Anthropic Messages | 官方 Anthropic 接口及严格实现 Messages 协议的代理服务 |
+| `ollama` | Ollama `/api/chat` | 本地 Ollama 模型(需具备视觉能力) |
+
+### CLI 用法
+
+```bash
+# 使用 Anthropic
+python main.py \
+  --provider anthropic \
+  --base-url https://api.anthropic.com \
+  --model "claude-sonnet-4-6" \
+  --api-key "$ANTHROPIC_API_KEY" \
+  "打开小红书搜索美食攻略"
+
+# 使用本地 Ollama 模型
+python main.py \
+  --provider ollama \
+  --base-url http://localhost:11434 \
+  --model "llama3.2-vision" \
+  "打开美团搜索附近的火锅店"
+```
+
+所有入口(`main.py` 和 `ios.py`)均支持以下参数和环境变量，优先级为 **命令行 > 环境变量 > provider 默认值**：
+
+| 参数 | 环境变量 | 说明 |
+|---|---|---|
+| `--provider` | `PHONE_AGENT_PROVIDER` | 模型供应商：`openai` / `anthropic` / `ollama` |
+| `--tool-mode` | `PHONE_AGENT_TOOL_MODE` | 工具调用模式：`auto` / `native` / `text` |
+| `--base-url` | `PHONE_AGENT_BASE_URL` | 模型服务地址(各 provider 默认值不同) |
+| `--model` | `PHONE_AGENT_MODEL` | 模型名称 |
+| `--api-key` | `PHONE_AGENT_API_KEY` | API Key(向后兼容别名 `--apikey`，两者同时出现时报冲突) |
+
+### 工具调用模式 (`tool_mode`)
+
+| 模式 | 行为 |
+|---|---|
+| `auto` (默认) | 优先发送原生 tool 定义；若服务在尚未返回任何内容前明确拒绝 tools(返回 400/422 且错误字段精确指向 `tools`/`tool_choice`)，自动重试一次无工具请求。服务接受 tools 但模型返回文本时，不重试，直接进入混合文本解析。仅 `openai`/`anthropic` adapter 会把这类拒绝降级为触发回退的信号；`ollama` 原生协议无结构化错误字段，被拒时直接报错、不自动回退，需要回退时请显式使用 `text` 模式。 |
+| `native` | 始终发送原生 tool 定义；服务拒绝时直接失败。 |
+| `text` | 从不发送原生 tool 定义，只使用现有 prompt + 文本 DSL(`do(...)`/`finish(...)`)、XML、JSON 输出。 |
+
+通用云端模型推荐用 `auto` 或 `native`；格式不稳定的本地模型可用 `text` 强制走文本解析。
+
+### Python API 示例
+
+```python
+import os
+from phone_agent import PhoneAgent
+from phone_agent.agent import AgentConfig
+from phone_agent.model import ModelConfig, ModelClient
+
+# Anthropic 示例
+anthropic_config = ModelConfig(
+    provider="anthropic",
+    model_name="claude-sonnet-4-6",
+    api_key=os.environ["ANTHROPIC_API_KEY"],
+    tool_mode="auto",
+)
+
+# Ollama 示例（localhost 是运行 Python 进程的主机，不是手机）
+ollama_config = ModelConfig(
+    provider="ollama",
+    model_name="llama3.2-vision",
+    base_url="http://localhost:11434",
+    tool_mode="auto",
+)
+
+# 使用注入 ModelClient 的方式，便于自定义或测试
+agent = PhoneAgent(
+    model_config=anthropic_config,
+    agent_config=AgentConfig(lang="cn"),
+    model_client=ModelClient(anthropic_config, verbose=True),
+)
+try:
+    agent.run("打开微信发送消息给文件传输助手")
+finally:
+    agent.close()
+```
+
+### 关键约束
+
+- **所有 provider 的模型必须支持图像输入**，否则截图无法送达模型；遇到服务明确不接受图像的错误，会转换为可读错误而非静默降级为纯文本。
+- `--base-url` 必须为绝对 http/https URL，不能包含用户名密码；尾斜杠会被自动去除。
+- `openai` 允许空 API Key(用 `"EMPTY"` 或缺省代表无鉴权，是否需要 Key 由服务决定)；`anthropic` 强制要求非空非 `"EMPTY"` 的 API Key；`ollama` 不接受 API Key，代理鉴权请通过 `extra_headers` 传入。
+- `frequency_penalty` 仅 `openai` 支持；`anthropic` 和 `ollama` 中 `None` 或 `0.0` 视为未启用，其它值会立即报配置错误。
+- `extra_body` 不能覆盖 `model`/`messages`/`tools`/`tool_choice`/`stream` 等保留字段；Ollama 的 `extra_body.options` 不能覆盖由 `max_tokens`/`temperature`/`top_p` 生成的 `num_predict`/`temperature`/`top_p`。
+- API Key 只从命令行、环境变量或调用方传入；日志和异常中会脱敏，请勿把它写入命令历史或长期文件。
+
+### 依赖
+
+本项目固定以下依赖下界，三个 provider 适配器共享使用：
+
+| 依赖 | 下界 | 用途 |
+|---|---|---|
+| `openai` | `>=2.9.0` | OpenAI-compatible adapter |
+| `anthropic` | `>=0.117.1` | Anthropic Messages adapter（流式原始事件接口） |
+| `httpx` | `>=0.28.1` | Ollama 原生协议直接调用 |
 
 ## 远程调试
 
@@ -498,13 +630,18 @@ conn.disconnect("192.168.1.100:5555")
 
 | 变量                          | 描述                     | 默认值                        |
 |-----------------------------|------------------------|----------------------------|
-| `PHONE_AGENT_BASE_URL`      | 模型 API 地址              | `http://localhost:8000/v1` |
-| `PHONE_AGENT_MODEL`         | 模型名称                   | `autoglm-phone-9b`         |
+| `PHONE_AGENT_PROVIDER`      | 模型供应商（`openai` / `anthropic` / `ollama`） | `openai` |
+| `PHONE_AGENT_TOOL_MODE`     | 工具调用模式（`auto` / `native` / `text`） | `auto` |
+| `PHONE_AGENT_BASE_URL`      | 模型 API 地址（按 provider 不同有不同默认值） | 见 [多模型供应商](#多模型供应商) |
+| `PHONE_AGENT_MODEL`         | 模型名称                   | `autoglm-phone-9b`(仅 `openai`) |
 | `PHONE_AGENT_API_KEY`       | 模型认证 API Key           | `EMPTY`                    |
 | `PHONE_AGENT_MAX_STEPS`     | 每个任务最大步数               | `100`                      |
 | `PHONE_AGENT_DEVICE_ID`     | ADB/HDC 设备 ID          | (自动检测)                     |
-| `PHONE_AGENT_DEVICE_TYPE`   | 设备类型 (`adb` 或 `hdc`)   | `adb`                      |
+| `PHONE_AGENT_DEVICE_TYPE`   | 设备类型 (`adb` / `hdc` / `ios`)   | `adb`                      |
 | `PHONE_AGENT_LANG`          | 语言 (`cn` 或 `en`)       | `cn`                       |
+| `PHONE_AGENT_WDA_URL`       | WebDriverAgent URL（仅 iOS） | `http://localhost:8100` |
+
+> 优先级：**命令行参数 > 环境变量 > provider 默认值**。
 
 ### 模型配置
 
@@ -515,24 +652,72 @@ config = ModelConfig(
     base_url="http://localhost:8000/v1",
     api_key="EMPTY",  # API 密钥(如需要)
     model_name="autoglm-phone-9b",  # 模型名称
-    max_tokens=3000,  # 最大输出 token 数
-    temperature=0.1,  # 采样温度
-    frequency_penalty=0.2,  # 频率惩罚
+    max_tokens=2048,  # 最大输出 token 数
+    temperature=0.1,  # 采样温度；None 时按 provider 适配为 OpenAI 路径有效默认（openai/anthropic/ollama 均为 0.0）
+    top_p=0.85,  # nucleus 采样概率；None 时 openai/ollama 用 0.85，anthropic 不发送该字段
+    frequency_penalty=0.2,  # 频率惩罚；仅 openai 发送，None 时用 0.2，anthropic/ollama 视为未启用
+    extra_body={},  # 追加到请求体的额外字段
+    lang="cn",  # UI 提示语言
+    provider="openai",  # openai / anthropic / ollama
+    tool_mode="auto",  # auto / native / text
+    timeout=120.0,  # 单次请求超时（秒）
+    extra_headers=None,  # 自定义头部（如代理鉴权），日志会脱敏
 )
 ```
+
+各 provider 的 `base_url` 默认值：
+
+| provider | 默认 `base_url` | 备注 |
+|---|---|---|
+| `openai` | `http://localhost:8000/v1` | SDK 追加资源路径 |
+| `anthropic` | `https://api.anthropic.com` | SDK 负责 Messages 路径 |
+| `ollama` | `http://localhost:11434` | adapter 追加 `/api/chat`、`/api/tags` |
 
 ### Agent 配置
 
 ```python
-from phone_agent.agent import AgentConfig
+from phone_agent.agent import AgentConfig  # Android/HarmonyOS
+from phone_agent.agent_ios import IOSAgentConfig  # iOS
 
 config = AgentConfig(
     max_steps=100,  # 每个任务最大步数
-    device_id=None,  # ADB 设备 ID(None 为自动检测)
+    device_id=None,  # ADB/HDC 设备 ID(None 为自动检测)
     lang="cn",  # 语言选择：cn(中文)或 en(英文)
+    system_prompt=None,  # 自定义 system prompt（None 时按 lang 读取默认）
     verbose=True,  # 打印调试信息(包括思考过程和执行动作)
 )
+
+# iOS 专用字段
+ios_config = IOSAgentConfig(
+    max_steps=100,
+    wda_url="http://localhost:8100",  # WebDriverAgent URL
+    device_id=None,  # iOS UDID
+    lang="cn",
+    verbose=True,
+)
 ```
+
+### 模型客户端依赖注入
+
+需要测试或自定义传输层时，可以构造 `ModelClient` 并注入 Agent：
+
+```python
+from phone_agent import PhoneAgent
+from phone_agent.model import ModelClient, ModelConfig
+
+model_config = ModelConfig(provider="openai")
+model_client = ModelClient(model_config, verbose=True)
+model_client.check_connection()  # 显式预检连接
+
+agent = PhoneAgent(model_config=model_config, model_client=model_client)
+try:
+    agent.run("打开微信")
+finally:
+    agent.close()       # 不会关闭注入的 model_client
+    model_client.close()  # 由调用方负责关闭
+```
+
+未注入 `model_client` 时，`PhoneAgent` 会内部创建并拥有 `ModelClient`，`agent.close()` 会自动关闭它。
 
 ### Verbose 模式输出
 
@@ -655,10 +840,8 @@ agent = PhoneAgent(
 
 查看 `examples/` 目录获取更多使用示例：
 
-- `basic_usage.py` - 基础任务执行
-- 单步调试模式
-- 批量任务执行
-- 自定义回调
+- `basic_usage.py` - 包含 5 个示例：基础任务执行、自定义回调、单步调试、批量任务、远程设备；文件头部还附有 Anthropic / Ollama 的 `ModelConfig` 配置片段。
+- `demo_thinking.py` - 演示 verbose 模式下同时输出 thinking 与 action 的执行流程。
 
 ## 二次开发
 
@@ -673,28 +856,70 @@ pip install -e ".[dev]"
 ### 运行测试
 
 ```bash
+# 运行全部测试
 pytest tests/
+
+# 仅运行模型层测试
+pytest tests/model/
+
+# 仅运行 Agent 或 CLI 测试
+pytest tests/agent/ tests/cli/
 ```
+
+测试覆盖三个 provider 适配器、统一响应解析、配置校验、Agent 生命周期、CLI 路由等，均使用 mock，不依赖真实模型服务。
+
+### 设计文档
+
+- [`docs/specs/2026-07-22-multi-model-provider-design.md`](docs/specs/2026-07-22-multi-model-provider-design.md) - 多模型供应商适配设计（OpenAI-compatible / Anthropic / Ollama，统一响应解析、工具模式与依赖注入）
+- [`docs/ios_setup/ios_setup.md`](docs/ios_setup/ios_setup.md) - iOS 环境配置指南
+
 
 ### 完整项目结构
 
 ```
-phone_agent/
-├── __init__.py          # 包导出
-├── agent.py             # PhoneAgent 主类
-├── adb/                 # ADB 工具
-│   ├── connection.py    # 远程/本地连接管理
-│   ├── screenshot.py    # 屏幕截图
-│   ├── input.py         # 文本输入 (ADB Keyboard)
-│   └── device.py        # 设备控制 (点击、滑动等)
-├── actions/             # 操作处理
-│   └── handler.py       # 操作执行器
-├── config/              # 配置
-│   ├── apps.py          # 支持的应用映射
-│   ├── prompts_zh.py    # 中文系统提示词
-│   └── prompts_en.py    # 英文系统提示词
-└── model/               # AI 模型客户端
-    └── client.py        # OpenAI 兼容客户端
+Open-AutoGLM/
+├── main.py                  # CLI 入口（Android / HarmonyOS / iOS 通用）
+├── ios.py                   # CLI 入口（iOS 专用，等价于 --device-type ios）
+├── phone_agent/
+│   ├── __init__.py          # 包导出（PhoneAgent / IOSPhoneAgent）
+│   ├── agent.py             # PhoneAgent 主类（Android/HarmonyOS）
+│   ├── agent_ios.py         # IOSPhoneAgent 主类
+│   ├── cli.py               # 共享的模型 CLI 选项解析
+│   ├── device_factory.py    # 设备类型工厂（adb / hdc / ios）
+│   ├── adb/                 # ADB 工具
+│   │   ├── connection.py    # 远程/本地连接管理
+│   │   ├── screenshot.py    # 屏幕截图
+│   │   ├── input.py         # 文本输入 (ADB Keyboard)
+│   │   └── device.py        # 设备控制（点击、滑动等）
+│   ├── hdc/                 # 鸿蒙 HDC 工具
+│   ├── xctest/              # iOS XCTest / WebDriverAgent 客户端
+│   ├── accessibility/       # 无障碍服务相关
+│   ├── actions/             # 操作处理
+│   │   ├── handler.py       # Android/HarmonyOS 操作执行器
+│   │   └── handler_ios.py   # iOS 操作执行器
+│   ├── config/              # 配置
+│   │   ├── apps.py          # Android 支持的应用映射
+│   │   ├── apps_harmonyos.py # 鸿蒙支持的应用映射
+│   │   ├── apps_ios.py      # iOS 支持的应用映射
+│   │   ├── prompts_zh.py     # 中文系统提示词
+│   │   └── prompts_en.py     # 英文系统提示词
+│   └── model/               # 多 provider 模型层
+│       ├── client.py        # ModelConfig / ModelResponse / ModelClient 兼容门面
+│       ├── base.py          # ModelAdapter 协议、共享异常类型
+│       ├── openai_compatible.py  # OpenAI Chat Completions adapter
+│       ├── anthropic.py     # Anthropic Messages adapter
+│       ├── ollama.py        # Ollama /api/chat adapter
+│       ├── response_parser.py # 原生 tool call / DSL / XML / JSON 解析
+│       └── tool_schema.py   # phone_action / finish 工具 schema
+├── examples/                # Python API 示例
+├── scripts/                 # 部署检查脚本
+├── tests/                   # 自动化测试
+│   ├── agent/               # Agent 流程与生命周期
+│   ├── cli/                 # CLI 入口与平台路由
+│   └── model/               # 模型层单元测试
+└── docs/
+    ├── ios_setup/           # iOS 环境配置
+    └── specs/               # 设计文档（含多 provider 适配设计）
 ```
 
 ## 常见问题

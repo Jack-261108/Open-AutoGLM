@@ -4,6 +4,9 @@ Thinking Output Demo / 演示 thinking 输出的示例
 
 This script demonstrates how the Agent outputs both thinking process and actions in verbose mode.
 这个脚本展示了在 verbose 模式下，Agent 会同时输出思考过程和执行动作。
+
+The configured model must support image input. For Anthropic or Ollama, use the
+provider configurations shown in basic_usage.py; those alternatives are not run here.
 """
 
 from phone_agent import PhoneAgent
@@ -19,8 +22,9 @@ def main(lang: str = "cn"):
     print("Phone Agent - Thinking Demo")
     print("=" * 60)
 
-    # Configure model
+    # Configure an OpenAI-compatible model (the default provider is openai)
     model_config = ModelConfig(
+        provider="openai",
         base_url="http://localhost:8000/v1",
         model_name="autoglm-phone-9b",
         temperature=0.1,
@@ -39,13 +43,16 @@ def main(lang: str = "cn"):
         agent_config=agent_config,
     )
 
-    # Execute task
-    print(f"\n📱 {msgs['starting_task']}...\n")
-    result = agent.run("打开小红书搜索美食攻略")
+    try:
+        # Execute task
+        print(f"\n📱 {msgs['starting_task']}...\n")
+        result = agent.run("打开小红书搜索美食攻略")
 
-    print("\n" + "=" * 60)
-    print(f"📊 {msgs['final_result']}: {result}")
-    print("=" * 60)
+        print("\n" + "=" * 60)
+        print(f"📊 {msgs['final_result']}: {result}")
+        print("=" * 60)
+    finally:
+        agent.close()
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@
 <img src=resources/logo.svg width="20%"/>
 </div>
 <p align="center">
-    👋 Join our<a href="resources/WECHAT.md" target="_blank"> Wechat</a> or <a href="https://discord.gg/C5bPxWq7" target="_blank">Discord</a> community.
+    👋 Join our<a href="resources/WECHAT.md" target="_blank"> Wechat</a> community
 </p>
 <p align="center">
     👋 Follow AutoGLM Autotyper <a href="https://x.com/Autotyper_Agent?s=20" target="_blank">X</a> account
@@ -184,6 +184,8 @@ python main.py --base-url https://api.novita.ai/openai --model "zai-org/autoglm-
 python main.py --base-url https://api.parasail.io/v1 --model "parasail-auto-glm-9b-multilingual" --apikey "your-parasail-api-key" "Open Chrome browser"
 ```
 
+> 💡 All third-party services above implement the OpenAI Chat Completions compatible protocol, so the default `--provider openai` works out of the box. Any OpenAI-compatible service (DashScope, custom vLLM/SGLang, etc.) can be wired up the same way. For other protocols (Anthropic Messages, Ollama), see the [Multi-Model Providers](#multi-model-providers) section below.
+
 #### Option B: Deploy Model Yourself
 
 If you prefer to deploy the model locally or on your own server:
@@ -263,6 +265,26 @@ python main.py --list-apps
 python main.py --device-type hdc --list-apps
 ```
 
+#### iOS Devices
+
+iOS devices can be driven either through `main.py` with `--device-type ios`, or via the dedicated `ios.py` entry point:
+
+```bash
+# iOS device - specify a task
+python ios.py --base-url http://localhost:8000/v1 --model "autoglm-phone-9b-multilingual" "Open Safari and search for iPhone tips"
+
+# iOS device - custom WebDriverAgent URL (WiFi debugging)
+python ios.py --wda-url http://192.168.1.100:8100
+
+# List connected iOS devices
+python ios.py --list-devices
+
+# Show WebDriverAgent status
+python ios.py --wda-status
+```
+
+For iOS environment setup, see the [iOS Setup Guide](docs/ios_setup/ios_setup.md).
+
 ### Python API
 
 ```python
@@ -278,10 +300,122 @@ model_config = ModelConfig(
 # Create Agent
 agent = PhoneAgent(model_config=model_config)
 
-# Execute task
-result = agent.run("Open eBay and search for wireless earphones")
-print(result)
+try:
+    # Execute task
+    result = agent.run("Open eBay and search for wireless earphones")
+    print(result)
+finally:
+    # Explicitly release the model client and device handles
+    agent.close()
 ```
+
+> ⚠️ `PhoneAgent` owns the model client and device handles internally. Wrap usage in `try/finally` and call `agent.close()` to avoid leaking connections on long-running or error paths. If you inject a custom client via `model_client=`, `agent.close()` will NOT close it — the caller is responsible for it.
+
+## Multi-Model Providers
+
+Besides the default `openai` (OpenAI Chat Completions compatible) protocol, this project supports two additional provider protocols. Switch explicitly with `--provider`; the project never guesses the protocol from URL or model name.
+
+| provider | Protocol | Use case |
+|---|---|---|
+| `openai` (default) | OpenAI Chat Completions | AutoGLM family, z.ai, ModelScope, DashScope gui-plus, local vLLM/SGLang, any OpenAI-compatible service |
+| `anthropic` | Anthropic Messages | Official Anthropic API and proxies that strictly implement the Messages protocol |
+| `ollama` | Ollama `/api/chat` | Local Ollama models (must support vision) |
+
+### CLI Usage
+
+```bash
+# Using Anthropic
+python main.py \
+  --provider anthropic \
+  --base-url https://api.anthropic.com \
+  --model "claude-sonnet-4-6" \
+  --api-key "$ANTHROPIC_API_KEY" \
+  "Open Chrome and search for Python tutorials"
+
+# Using local Ollama
+python main.py \
+  --provider ollama \
+  --base-url http://localhost:11434 \
+  --model "llama3.2-vision" \
+  "Open Maps and search for nearby coffee shops"
+```
+
+All entry points (`main.py` and `ios.py`) support the following arguments and environment variables, with precedence **CLI > env vars > provider defaults**:
+
+| Argument | Environment variable | Description |
+|---|---|---|
+| `--provider` | `PHONE_AGENT_PROVIDER` | Provider: `openai` / `anthropic` / `ollama` |
+| `--tool-mode` | `PHONE_AGENT_TOOL_MODE` | Tool calling mode: `auto` / `native` / `text` |
+| `--base-url` | `PHONE_AGENT_BASE_URL` | Provider service URL (defaults differ per provider) |
+| `--model` | `PHONE_AGENT_MODEL` | Model name |
+| `--api-key` | `PHONE_AGENT_API_KEY` | API key (backwards-compatible alias `--apikey`; passing both raises a conflict) |
+
+### Tool Calling Modes (`tool_mode`)
+
+| Mode | Behavior |
+|---|---|
+| `auto` (default) | Sends native tool definitions first. If the server rejects `tools` with a 400/422 error whose error field points exactly at `tools`/`tool_choice` before any content has been streamed, retries once without tools. If the server accepts tools but the model returns text, no retry — parse as hybrid text. |
+| `native` | Always sends native tool definitions; fails immediately if the server rejects them. |
+| `text` | Never sends native tool definitions. Only uses prompt + text DSL (`do(...)` / `finish(...)`), XML, or JSON output. |
+
+`auto` or `native` is recommended for general cloud models. Use `text` for local models with unstable formatting.
+
+### Python API Example
+
+```python
+import os
+from phone_agent import PhoneAgent
+from phone_agent.agent import AgentConfig
+from phone_agent.model import ModelConfig, ModelClient
+
+# Anthropic example
+anthropic_config = ModelConfig(
+    provider="anthropic",
+    model_name="claude-sonnet-4-6",
+    api_key=os.environ["ANTHROPIC_API_KEY"],
+    tool_mode="auto",
+)
+
+# Ollama example (localhost is the host running this Python process, not the phone)
+ollama_config = ModelConfig(
+    provider="ollama",
+    model_name="llama3.2-vision",
+    base_url="http://localhost:11434",
+    tool_mode="auto",
+)
+
+# Inject a ModelClient for custom transport or testing
+agent = PhoneAgent(
+    model_config=anthropic_config,
+    agent_config=AgentConfig(lang="en"),
+    model_client=ModelClient(anthropic_config, verbose=True),
+)
+try:
+    agent.run("Open Chrome and visit github.com")
+finally:
+    agent.close()
+```
+
+### Key Constraints
+
+- **Models from all providers must support image input** so screenshots can reach the model. If the server explicitly rejects images, the error is surfaced as a readable message rather than silently degrading to text.
+- `--base-url` must be an absolute http/https URL with no embedded credentials; trailing slashes are stripped automatically.
+- `openai` allows an empty API key (`"EMPTY"` or omitted — whether a key is required depends on the server); `anthropic` requires a non-empty key other than `"EMPTY"`; `ollama` does not accept an API key — use `extra_headers` for proxy authentication.
+- `frequency_penalty` is only supported by `openai`. For `anthropic` and `ollama`, `None` or `0.0` are treated as "not set"; any other value raises a configuration error.
+- `extra_body` cannot override reserved fields such as `model`/`messages`/`tools`/`tool_choice`/`stream`. Ollama's `extra_body.options` cannot override `num_predict`/`temperature`/`top_p` generated from `ModelConfig` fields.
+- API keys are only taken from CLI, environment variables, or caller code. They are masked in logs and exceptions — never persist them in command history or long-lived files.
+
+### Dependencies
+
+The project pins the following lower bounds, shared across all three provider adapters:
+
+| Dependency | Lower bound | Used by |
+|---|---|---|
+| `openai` | `>=2.9.0` | OpenAI-compatible adapter |
+| `anthropic` | `>=0.117.1` | Anthropic Messages adapter (raw streaming event interface) |
+| `httpx` | `>=0.28.1` | Direct Ollama native protocol calls |
+
+
 
 ## Remote Debugging
 
@@ -438,13 +572,18 @@ You can directly modify the corresponding config files to enhance model capabili
 
 | Variable                    | Description               | Default Value              |
 |-----------------------------|---------------------------|----------------------------|
-| `PHONE_AGENT_BASE_URL`      | Model API URL             | `http://localhost:8000/v1` |
-| `PHONE_AGENT_MODEL`         | Model name                | `autoglm-phone-9b`         |
+| `PHONE_AGENT_PROVIDER`       | Model provider (`openai` / `anthropic` / `ollama`) | `openai` |
+| `PHONE_AGENT_TOOL_MODE`     | Tool calling mode (`auto` / `native` / `text`) | `auto` |
+| `PHONE_AGENT_BASE_URL`      | Model API URL (defaults differ per provider) | See [Multi-Model Providers](#multi-model-providers) |
+| `PHONE_AGENT_MODEL`         | Model name                | `autoglm-phone-9b` (only `openai`) |
 | `PHONE_AGENT_API_KEY`       | API key for authentication| `EMPTY`                    |
 | `PHONE_AGENT_MAX_STEPS`     | Maximum steps per task    | `100`                      |
-| `PHONE_AGENT_DEVICE_ID`     | ADB/HDC device ID         | (auto-detect)              |
-| `PHONE_AGENT_DEVICE_TYPE`   | Device type (`adb` or `hdc`)| `adb`                    |
+| `PHONE_AGENT_DEVICE_ID`     | ADB/HDC/iOS device ID     | (auto-detect)              |
+| `PHONE_AGENT_DEVICE_TYPE`   | Device type (`adb` / `hdc` / `ios`)| `adb`                    |
 | `PHONE_AGENT_LANG`          | Language (`cn` or `en`)   | `en`                       |
+| `PHONE_AGENT_WDA_URL`       | WebDriverAgent URL (iOS only) | `http://localhost:8100` |
+
+> Precedence: **CLI arguments > environment variables > provider defaults**.
 
 ### Model Configuration
 
@@ -455,24 +594,72 @@ config = ModelConfig(
     base_url="http://localhost:8000/v1",
     api_key="EMPTY",  # API key (if required)
     model_name="autoglm-phone-9b-multilingual",  # Model name
-    max_tokens=3000,  # Maximum output tokens
-    temperature=0.1,  # Sampling temperature
-    frequency_penalty=0.2,  # Frequency penalty
+    max_tokens=2048,  # Maximum output tokens
+    temperature=0.1,  # Sampling temperature; None maps to the OpenAI-path effective default (0.0 for openai/anthropic/ollama)
+    top_p=0.85,  # Nucleus sampling probability; None uses 0.85 for openai/ollama, anthropic omits the field
+    frequency_penalty=0.2,  # Frequency penalty; only sent by openai (None uses 0.2), anthropic/ollama treat as unset
+    extra_body={},  # Extra fields appended to the request body
+    lang="en",  # UI prompt language
+    provider="openai",  # openai / anthropic / ollama
+    tool_mode="auto",  # auto / native / text
+    timeout=120.0,  # Per-request timeout in seconds
+    extra_headers=None,  # Custom headers (e.g. proxy auth); masked in logs
 )
 ```
+
+Default `base_url` per provider:
+
+| provider | Default `base_url` | Notes |
+|---|---|---|
+| `openai` | `http://localhost:8000/v1` | SDK appends resource paths |
+| `anthropic` | `https://api.anthropic.com` | SDK handles Messages path |
+| `ollama` | `http://localhost:11434` | Adapter appends `/api/chat`, `/api/tags` |
 
 ### Agent Configuration
 
 ```python
-from phone_agent.agent import AgentConfig
+from phone_agent.agent import AgentConfig  # Android/HarmonyOS
+from phone_agent.agent_ios import IOSAgentConfig  # iOS
 
 config = AgentConfig(
     max_steps=100,  # Maximum steps per task
-    device_id=None,  # ADB device ID (None for auto-detect)
+    device_id=None,  # ADB/HDC device ID (None for auto-detect)
     lang="en",  # Language: cn (Chinese) or en (English)
+    system_prompt=None,  # Custom system prompt (None = read default by lang)
     verbose=True,  # Print debug info (including thinking process and actions)
 )
+
+# iOS-specific fields
+ios_config = IOSAgentConfig(
+    max_steps=100,
+    wda_url="http://localhost:8100",  # WebDriverAgent URL
+    device_id=None,  # iOS UDID
+    lang="en",
+    verbose=True,
+)
 ```
+
+### Injecting a Model Client
+
+For testing or custom transports, construct a `ModelClient` and inject it into the Agent:
+
+```python
+from phone_agent import PhoneAgent
+from phone_agent.model import ModelClient, ModelConfig
+
+model_config = ModelConfig(provider="openai")
+model_client = ModelClient(model_config, verbose=True)
+model_client.check_connection()  # Explicit pre-flight check
+
+agent = PhoneAgent(model_config=model_config, model_client=model_client)
+try:
+    agent.run("Open WeChat")
+finally:
+    agent.close()         # Does NOT close the injected model_client
+    model_client.close()  # Caller owns the injected client
+```
+
+Without `model_client=` injected, `PhoneAgent` creates and owns a `ModelClient` internally, and `agent.close()` closes it for you.
 
 ### Verbose Mode Output
 
@@ -592,10 +779,8 @@ agent = PhoneAgent(
 
 Check the `examples/` directory for more usage examples:
 
-- `basic_usage.py` - Basic task execution
-- Single-step debugging mode
-- Batch task execution
-- Custom callbacks
+- `basic_usage.py` - Five examples: basic task, custom callbacks, single-step debugging, batch tasks, and remote device. File docstring also includes Anthropic / Ollama `ModelConfig` snippets.
+- `demo_thinking.py` - Demonstrates verbose mode that prints thinking and action side by side.
 
 ## Development
 
@@ -610,28 +795,69 @@ pip install -e ".[dev]"
 ### Run Tests
 
 ```bash
+# Run all tests
 pytest tests/
+
+# Only model-layer tests
+pytest tests/model/
+
+# Only Agent or CLI tests
+pytest tests/agent/ tests/cli/
 ```
+
+Tests cover the three provider adapters, unified response parsing, configuration validation, Agent lifecycle, and CLI routing — all mock-based, with no real model service required.
+
+### Design Documents
+
+- [`docs/specs/2026-07-22-multi-model-provider-design.md`](docs/specs/2026-07-22-multi-model-provider-design.md) — Multi-model provider adapter design (OpenAI-compatible / Anthropic / Ollama, unified response parsing, tool modes, and dependency injection)
+- [`docs/ios_setup/ios_setup.md`](docs/ios_setup/ios_setup.md) — iOS environment setup guide
 
 ### Complete Project Structure
 
 ```
-phone_agent/
-├── __init__.py          # Package exports
-├── agent.py             # PhoneAgent main class
-├── adb/                 # ADB utilities
-│   ├── connection.py    # Remote/local connection management
-│   ├── screenshot.py    # Screen capture
-│   ├── input.py         # Text input (ADB Keyboard)
-│   └── device.py        # Device control (tap, swipe, etc.)
-├── actions/             # Action handling
-│   └── handler.py       # Action executor
-├── config/              # Configuration
-│   ├── apps.py          # Supported app mappings
-│   ├── prompts_zh.py    # Chinese system prompts
-│   └── prompts_en.py    # English system prompts
-└── model/               # AI model client
-    └── client.py        # OpenAI-compatible client
+Open-AutoGLM/
+├── main.py                  # CLI entry point (Android / HarmonyOS / iOS)
+├── ios.py                   # CLI entry point (iOS-specific, equivalent to --device-type ios)
+├── phone_agent/
+│   ├── __init__.py          # Package exports (PhoneAgent / IOSPhoneAgent)
+│   ├── agent.py             # PhoneAgent main class (Android/HarmonyOS)
+│   ├── agent_ios.py         # IOSPhoneAgent main class
+│   ├── cli.py               # Shared model CLI option parsing
+│   ├── device_factory.py    # Device type factory (adb / hdc / ios)
+│   ├── adb/                 # ADB utilities
+│   │   ├── connection.py    # Remote/local connection management
+│   │   ├── screenshot.py    # Screen capture
+│   │   ├── input.py         # Text input (ADB Keyboard)
+│   │   └── device.py        # Device control (tap, swipe, etc.)
+│   ├── hdc/                 # HarmonyOS HDC utilities
+│   ├── xctest/              # iOS XCTest / WebDriverAgent client
+│   ├── accessibility/       # Accessibility service hooks
+│   ├── actions/             # Action handling
+│   │   ├── handler.py       # Android/HarmonyOS action executor
+│   │   └── handler_ios.py   # iOS action executor
+│   ├── config/              # Configuration
+│   │   ├── apps.py          # Android app mappings
+│   │   ├── apps_harmonyos.py # HarmonyOS app mappings
+│   │   ├── apps_ios.py      # iOS app mappings
+│   │   ├── prompts_zh.py    # Chinese system prompts
+│   │   └── prompts_en.py    # English system prompts
+│   └── model/               # Multi-provider model layer
+│       ├── client.py        # ModelConfig / ModelResponse / ModelClient facade
+│       ├── base.py          # ModelAdapter protocol, shared exceptions
+│       ├── openai_compatible.py  # OpenAI Chat Completions adapter
+│       ├── anthropic.py     # Anthropic Messages adapter
+│       ├── ollama.py        # Ollama /api/chat adapter
+│       ├── response_parser.py # Native tool call / DSL / XML / JSON parsing
+│       └── tool_schema.py   # phone_action / finish tool schemas
+├── examples/                # Python API examples
+├── scripts/                 # Deployment check scripts
+├── tests/                   # Automated tests
+│   ├── agent/               # Agent flows and lifecycle
+│   ├── cli/                 # CLI entry points and platform routing
+│   └── model/               # Model-layer unit tests
+└── docs/
+    ├── ios_setup/           # iOS environment setup
+    └── specs/               # Design documents (multi-provider design)
 ```
 
 ## FAQ

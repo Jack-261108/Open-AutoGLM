@@ -4,6 +4,26 @@ Phone Agent Usage Examples / Phone Agent 使用示例
 
 Demonstrates how to use Phone Agent for phone automation tasks via Python API.
 演示如何通过 Python API 使用 Phone Agent 进行手机自动化任务。
+
+The selected model must support image input. Alternative provider configuration
+snippets (not executed automatically):
+
+    import os
+
+    anthropic_config = ModelConfig(
+        provider="anthropic",
+        model_name="<ANTHROPIC_VISION_MODEL>",
+        api_key=os.environ["PHONE_AGENT_API_KEY"],
+        tool_mode="auto",
+    )
+    ollama_config = ModelConfig(
+        provider="ollama",
+        model_name="<OLLAMA_VISION_MODEL>",
+        base_url="http://localhost:11434",
+        tool_mode="auto",
+    )
+
+For Ollama, localhost is the host running this Python process, not the phone.
 """
 
 from phone_agent import PhoneAgent
@@ -16,8 +36,9 @@ def example_basic_task(lang: str = "cn"):
     """Basic task example / 基础任务示例"""
     msgs = get_messages(lang)
 
-    # Configure model endpoint
+    # Configure an OpenAI-compatible model endpoint (the default provider is openai)
     model_config = ModelConfig(
+        provider="openai",
         base_url="http://localhost:8000/v1",
         model_name="autoglm-phone-9b",
         temperature=0.1,
@@ -36,9 +57,12 @@ def example_basic_task(lang: str = "cn"):
         agent_config=agent_config,
     )
 
-    # Execute task
-    result = agent.run("打开小红书搜索美食攻略")
-    print(f"{msgs['task_result']}: {result}")
+    try:
+        # Execute task
+        result = agent.run("打开小红书搜索美食攻略")
+        print(f"{msgs['task_result']}: {result}")
+    finally:
+        agent.close()
 
 
 def example_with_callbacks(lang: str = "cn"):
@@ -65,9 +89,12 @@ def example_with_callbacks(lang: str = "cn"):
         takeover_callback=my_takeover,
     )
 
-    # Execute task that may require confirmation
-    result = agent.run("打开淘宝搜索无线耳机并加入购物车")
-    print(f"{msgs['task_result']}: {result}")
+    try:
+        # Execute task that may require confirmation
+        result = agent.run("打开淘宝搜索无线耳机并加入购物车")
+        print(f"{msgs['task_result']}: {result}")
+    finally:
+        agent.close()
 
 
 def example_step_by_step(lang: str = "cn"):
@@ -77,17 +104,20 @@ def example_step_by_step(lang: str = "cn"):
     agent_config = AgentConfig(lang=lang)
     agent = PhoneAgent(agent_config=agent_config)
 
-    # Initialize task
-    result = agent.step("打开美团搜索附近的火锅店")
-    print(f"{msgs['step']} 1: {result.action}")
+    try:
+        # Initialize task
+        result = agent.step("打开美团搜索附近的火锅店")
+        print(f"{msgs['step']} 1: {result.action}")
 
-    # Continue if not finished
-    while not result.finished and agent.step_count < 10:
-        result = agent.step()
-        print(f"{msgs['step']} {agent.step_count}: {result.action}")
-        print(f"  {msgs['thinking']}: {result.thinking[:100]}...")
+        # Continue if not finished
+        while not result.finished and agent.step_count < 10:
+            result = agent.step()
+            print(f"{msgs['step']} {agent.step_count}: {result.action}")
+            print(f"  {msgs['thinking']}: {result.thinking[:100]}...")
 
-    print(f"\n{msgs['final_result']}: {result.message}")
+        print(f"\n{msgs['final_result']}: {result.message}")
+    finally:
+        agent.close()
 
 
 def example_multiple_tasks(lang: str = "cn"):
@@ -103,16 +133,19 @@ def example_multiple_tasks(lang: str = "cn"):
         "打开bilibili搜索Python教程",
     ]
 
-    for task in tasks:
-        print(f"\n{'=' * 50}")
-        print(f"{msgs['task']}: {task}")
-        print("=" * 50)
+    try:
+        for task in tasks:
+            print(f"\n{'=' * 50}")
+            print(f"{msgs['task']}: {task}")
+            print("=" * 50)
 
-        result = agent.run(task)
-        print(f"{msgs['result']}: {result}")
+            result = agent.run(task)
+            print(f"{msgs['result']}: {result}")
 
-        # Reset Agent state
-        agent.reset()
+            # Reset Agent state
+            agent.reset()
+    finally:
+        agent.close()
 
 
 def example_remote_device(lang: str = "cn"):
@@ -132,21 +165,24 @@ def example_remote_device(lang: str = "cn"):
 
     print(f"{msgs['connection_successful']}: {message}")
 
-    # Create Agent with device specified
-    agent_config = AgentConfig(
-        device_id="192.168.1.100:5555",
-        verbose=True,
-        lang=lang,
-    )
+    try:
+        # Create Agent with device specified
+        agent_config = AgentConfig(
+            device_id="192.168.1.100:5555",
+            verbose=True,
+            lang=lang,
+        )
 
-    agent = PhoneAgent(agent_config=agent_config)
-
-    # Execute task
-    result = agent.run("打开微信查看消息")
-    print(f"{msgs['task_result']}: {result}")
-
-    # Disconnect
-    conn.disconnect("192.168.1.100:5555")
+        agent = PhoneAgent(agent_config=agent_config)
+        try:
+            # Execute task
+            result = agent.run("打开微信查看消息")
+            print(f"{msgs['task_result']}: {result}")
+        finally:
+            agent.close()
+    finally:
+        # Disconnect
+        conn.disconnect("192.168.1.100:5555")
 
 
 if __name__ == "__main__":
