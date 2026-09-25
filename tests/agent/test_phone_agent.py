@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import phone_agent.agent as agent_module
-from phone_agent.agent import AccessibilityMode, AgentConfig, PhoneAgent
+from phone_agent.agent import AgentConfig, PhoneAgent
 from phone_agent.device_factory import DeviceType
 
 
@@ -17,9 +17,7 @@ def build_agent(monkeypatch, fake_action_handler, screenshot_factory):
         screenshots=("screen-1",),
         apps=None,
         verbose=False,
-        ui_tree=None,
         fallback=False,
-        accessibility: AccessibilityMode = "auto",
     ):
         shots = []
         for value in screenshots:
@@ -32,8 +30,6 @@ def build_agent(monkeypatch, fake_action_handler, screenshot_factory):
             get_screenshot=lambda device_id=None: next(screenshot_values),
             get_current_app=lambda device_id=None: next(app_values),
         )
-        if ui_tree is not None:
-            device.get_ui_tree = lambda device_id=None: ui_tree
         monkeypatch.setattr(agent_module, "get_device_factory", lambda: device)
         monkeypatch.setattr(
             agent_module,
@@ -44,7 +40,6 @@ def build_agent(monkeypatch, fake_action_handler, screenshot_factory):
             agent_config=AgentConfig(
                 system_prompt="system prompt",
                 verbose=verbose,
-                accessibility=accessibility,
             ),
             model_client=client,
         )
@@ -312,171 +307,6 @@ def _user_text(message):
     return [
         item["text"] for item in message["content"] if item.get("type") == "text"
     ][0]
-
-
-def test_ui_tree_is_added_to_the_screen_message(
-    build_agent,
-    fake_model_client_factory,
-    response_factory,
-):
-    from phone_agent.accessibility import UIElement, UITree
-
-    tree = UITree(
-        elements=[
-            UIElement(
-                role="TextView",
-                text="设置",
-                bounds=(0, 0, 100, 40),
-                clickable=True,
-            )
-        ],
-        width=100,
-        height=200,
-    )
-    client = fake_model_client_factory(
-        response_factory(parsed_action={"_metadata": "do", "action": "Back"}),
-    )
-    agent, _handler = build_agent(client, ui_tree=tree, accessibility="on")
-
-    agent.step("open settings")
-
-    assert 'TextView "设置" clickable center=[500,100]' in _user_text(
-        client.requests[0][-1]
-    )
-
-
-def test_accessibility_stays_off_when_the_screenshot_works(
-    build_agent,
-    fake_model_client_factory,
-    response_factory,
-):
-    from phone_agent.accessibility import UIElement, UITree
-
-    tree = UITree(
-        elements=[
-            UIElement("Button", "设置", (0, 0, 10, 10), clickable=True)
-        ],
-        width=10,
-        height=10,
-    )
-    client = fake_model_client_factory(
-        response_factory(parsed_action={"_metadata": "do", "action": "Back"}),
-    )
-    agent, _handler = build_agent(client, ui_tree=tree)
-    calls = []
-    agent.device_factory.get_ui_tree = lambda device_id=None: calls.append(device_id)
-
-    agent.step("open settings")
-
-    assert calls == []
-    assert "UI Elements" not in _user_text(client.requests[0][-1])
-
-
-def test_ui_tree_is_used_when_the_screenshot_is_unusable(
-    build_agent,
-    fake_model_client_factory,
-    response_factory,
-):
-    client = fake_model_client_factory(
-        response_factory(parsed_action={"_metadata": "do", "action": "Back"}),
-    )
-    agent, _handler = build_agent(
-        client, ui_tree=_settings_tree(), fallback=True
-    )
-
-    agent.step("open settings")
-
-    text = _user_text(client.requests[0][-1])
-    assert '"screenshot": "unavailable"' in text
-    assert 'TextView "设置" clickable center=[500,100]' in text
-
-
-def test_accessibility_off_ignores_an_unusable_screenshot(
-    build_agent,
-    fake_model_client_factory,
-    response_factory,
-):
-    client = fake_model_client_factory(
-        response_factory(parsed_action={"_metadata": "do", "action": "Back"}),
-    )
-    agent, _handler = build_agent(
-        client, ui_tree=_settings_tree(), fallback=True, accessibility="off"
-    )
-    calls = []
-    agent.device_factory.get_ui_tree = lambda device_id=None: calls.append(device_id)
-
-    agent.step("open settings")
-
-    text = _user_text(client.requests[0][-1])
-    assert calls == []
-    assert "UI Elements" not in text
-    assert '"screenshot": "unavailable"' in text
-
-
-def _settings_tree():
-    from phone_agent.accessibility import UIElement, UITree
-
-    return UITree(
-        elements=[
-            UIElement(
-                role="TextView",
-                text="设置",
-                bounds=(0, 0, 100, 40),
-                clickable=True,
-            )
-        ],
-        width=100,
-        height=200,
-    )
-
-
-def test_ui_elements_do_not_stay_in_later_requests(
-    build_agent,
-    fake_model_client_factory,
-    response_factory,
-):
-    client = fake_model_client_factory(
-        response_factory(parsed_action={"_metadata": "do", "action": "Back"}),
-        response_factory(parsed_action={"_metadata": "finish", "message": "done"}),
-    )
-    agent, _handler = build_agent(
-        client,
-        screenshots=("screen-1", "screen-2"),
-        ui_tree=_settings_tree(),
-        accessibility="on",
-    )
-
-    agent.step("open settings")
-    agent.step()
-
-    assert "UI Elements" in _user_text(client.requests[0][-1])
-    earlier_users = [
-        _user_text(message)
-        for message in client.requests[1]
-        if message.get("role") == "user"
-    ]
-    assert "open settings" in earlier_users[0]
-    assert "UI Elements" not in earlier_users[0]
-    assert "UI Elements" in earlier_users[1]
-
-
-def test_ui_elements_are_removed_when_the_model_request_fails(
-    build_agent,
-    fake_model_client_factory,
-):
-    client = fake_model_client_factory(RuntimeError("model unavailable"))
-    agent, _handler = build_agent(
-        client, ui_tree=_settings_tree(), accessibility="on"
-    )
-
-    result = agent.step("open settings")
-
-    assert result.success is False
-    assert "UI Elements" in _user_text(client.requests[0][-1])
-    stored = _user_text(agent.context[-1])
-    assert "open settings" in stored
-    assert "current_app" in stored
-    assert "UI Elements" not in stored
 
 
 def test_hdc_agent_config_does_not_use_global_factory(

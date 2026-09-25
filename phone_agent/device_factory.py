@@ -92,17 +92,6 @@ class DeviceFactory:
             )
         return self.module.get_current_app(device_id)
 
-    def get_ui_tree(self, device_id: str | None = None):
-        """Get a compact accessibility tree, or None if the platform dump fails."""
-        if self.device_type == DeviceType.IOS:
-            from phone_agent import xctest
-
-            return xctest.get_ui_tree(
-                wda_url=self.wda_url or "http://localhost:8100",
-                session_id=self.session_id,
-            )
-        return self.module.get_ui_tree(device_id)
-
     def tap(
         self, x: int, y: int, device_id: str | None = None, delay: float | None = None
     ):

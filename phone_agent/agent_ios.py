@@ -99,7 +99,7 @@ class IOSPhoneAgent(PhoneAgent):
             verbose=config.verbose,
         )
 
-    def _capture_screen_and_app(self) -> tuple[Any, str, str]:
+    def _capture_screen_and_app(self) -> tuple[Any, str]:
         """Capture screenshot and current app (preserves agent_ios module monkeypatches)."""
         screenshot = get_screenshot(
             wda_url=self.agent_config.wda_url,
@@ -110,7 +110,7 @@ class IOSPhoneAgent(PhoneAgent):
             wda_url=self.agent_config.wda_url,
             session_id=self.agent_config.session_id,
         )
-        return screenshot, current_app, self._capture_ui_text(screenshot)
+        return screenshot, current_app
 
     def _parse_model_action(self, response: Any) -> Any:
         """Parse action using module-scoped parse_action."""

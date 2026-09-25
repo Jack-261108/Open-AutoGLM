@@ -893,7 +893,6 @@ Open-AutoGLM/
 │   │   └── device.py        # 设备控制（点击、滑动等）
 │   ├── hdc/                 # 鸿蒙 HDC 工具
 │   ├── xctest/              # iOS XCTest / WebDriverAgent 客户端
-│   ├── accessibility/       # 无障碍服务相关
 │   ├── actions/             # 操作处理
 │   │   ├── handler.py       # Android/HarmonyOS 操作执行器
 │   │   └── handler_ios.py   # iOS 操作执行器

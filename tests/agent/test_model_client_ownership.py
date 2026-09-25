@@ -96,10 +96,6 @@ def build_agent(monkeypatch, screenshot_factory, fake_action_handler):
             lambda **kwargs: "FakeIOSApp",
         )
         monkeypatch.setattr(
-            "phone_agent.xctest.get_ui_tree",
-            lambda **kwargs: None,
-        )
-        monkeypatch.setattr(
             ios_module,
             "XCTestConnection",
             lambda wda_url: connection,
@@ -199,13 +195,6 @@ def test_request_only_injected_client_is_usable(
 def test_agent_config_rejects_non_positive_max_steps(config_class, max_steps):
     with pytest.raises(ValueError, match="max_steps must be a positive integer"):
         config_class(max_steps=max_steps)
-
-
-@pytest.mark.parametrize("config_class", [AgentConfig, IOSAgentConfig])
-@pytest.mark.parametrize("accessibility", ["", "sometimes", True])
-def test_agent_config_rejects_unknown_accessibility(config_class, accessibility):
-    with pytest.raises(ValueError, match="accessibility must be auto, on, or off"):
-        config_class(accessibility=accessibility)
 
 
 def test_ios_initialization_failure_does_not_create_or_close_model_client(monkeypatch):

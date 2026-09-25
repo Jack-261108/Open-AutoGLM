@@ -831,7 +831,6 @@ Open-AutoGLM/
 │   │   └── device.py        # Device control (tap, swipe, etc.)
 │   ├── hdc/                 # HarmonyOS HDC utilities
 │   ├── xctest/              # iOS XCTest / WebDriverAgent client
-│   ├── accessibility/       # Accessibility service hooks
 │   ├── actions/             # Action handling
 │   │   ├── handler.py       # Android/HarmonyOS action executor
 │   │   └── handler_ios.py   # iOS action executor

@@ -36,10 +36,6 @@ def build_agent(monkeypatch, fake_action_handler, screenshot_factory):
             lambda **kwargs: next(app_values),
         )
         monkeypatch.setattr(
-            "phone_agent.xctest.get_ui_tree",
-            lambda **kwargs: None,
-        )
-        monkeypatch.setattr(
             agent_module,
             "XCTestConnection",
             lambda wda_url: connection,

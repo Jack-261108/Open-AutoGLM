@@ -77,44 +77,6 @@ def get_current_app(device_id: str | None = None) -> str:
     return "System Home"
 
 
-def get_ui_tree(device_id: str | None = None, timeout: int = 10):
-    """Dump the HarmonyOS accessibility tree. Returns None when dump fails."""
-    from phone_agent.accessibility import parse_harmony_hierarchy
-
-    hdc_prefix = _get_hdc_prefix(device_id)
-    try:
-        dump = _run_hdc_command(
-            hdc_prefix + ["shell", "uitest", "dumpLayout"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-    if dump.returncode != 0:
-        return None
-    output = f"{dump.stdout or ''}\n{dump.stderr or ''}"
-    path_match = re.search(r"(/[^\s'\"]+\.json)", output)
-    raw = dump.stdout or ""
-    if path_match:
-        try:
-            cat = _run_hdc_command(
-                hdc_prefix + ["shell", "cat", path_match.group(1)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=timeout,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-        raw = cat.stdout or ""
-    if not raw.strip():
-        return None
-    return parse_harmony_hierarchy(raw)
-
-
 def tap(
     x: int, y: int, device_id: str | None = None, delay: float | None = None
 ) -> None:

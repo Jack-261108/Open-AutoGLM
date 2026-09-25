@@ -3,7 +3,7 @@
 import json
 import traceback
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Callable
 
 from phone_agent.actions import ActionHandler
 from phone_agent.actions.handler import finish, parse_action
@@ -11,10 +11,6 @@ from phone_agent.config import get_messages, get_system_prompt
 from phone_agent.device_factory import DeviceFactory, DeviceType, get_device_factory
 from phone_agent.model import ModelClient, ModelClientProtocol, ModelConfig
 from phone_agent.model.client import MessageBuilder
-
-AccessibilityMode = Literal["auto", "on", "off"]
-_UI_ELEMENTS_MARKER = "\n\n** UI Elements **\n"
-
 
 @dataclass
 class AgentConfig:
@@ -25,7 +21,6 @@ class AgentConfig:
     device_type: DeviceType = DeviceType.ADB
     wda_url: str = "http://localhost:8100"
     session_id: str | None = None
-    accessibility: AccessibilityMode = "auto"
     lang: str = "cn"
     system_prompt: str | None = None
     verbose: bool = True
@@ -33,8 +28,6 @@ class AgentConfig:
     def __post_init__(self):
         if type(self.max_steps) is not int or self.max_steps < 1:
             raise ValueError("max_steps must be a positive integer")
-        if self.accessibility not in ("auto", "on", "off"):
-            raise ValueError("accessibility must be auto, on, or off")
         if self.system_prompt is None:
             self.system_prompt = get_system_prompt(self.lang)
 
@@ -49,21 +42,6 @@ class StepResult:
     thinking: str
     message: str | None = None
     observation: str | None = None
-
-
-def _drop_ui_elements(message: dict[str, Any]) -> dict[str, Any]:
-    """Remove the accessibility list after the model has seen it."""
-    content = message.get("content")
-    if not isinstance(content, list):
-        return message
-    for item in content:
-        text = item.get("text")
-        if item.get("type") != "text" or not isinstance(text, str):
-            continue
-        split_at = text.rfind(_UI_ELEMENTS_MARKER)
-        if split_at >= 0:
-            item["text"] = text[:split_at]
-    return message
 
 
 class PhoneAgent:
@@ -221,31 +199,11 @@ class PhoneAgent:
         elif self.agent_config.verbose:
             print("⚠️  Using default WDA session (no explicit session ID)")
 
-    def _capture_screen_and_app(self) -> tuple[Any, str, str]:
-        """Capture screenshot, current app, and compact accessibility text."""
+    def _capture_screen_and_app(self) -> tuple[Any, str]:
+        """Capture screenshot and current app."""
         screenshot = self.device_factory.get_screenshot(self.agent_config.device_id)
         current_app = self.device_factory.get_current_app(self.agent_config.device_id)
-        return screenshot, current_app, self._capture_ui_text(screenshot)
-
-    def _capture_ui_text(self, screenshot: Any) -> str:
-        """Read the accessibility tree. Empty string keeps screenshot-only behavior."""
-        mode = self.agent_config.accessibility
-        if mode == "off" or (
-            mode == "auto" and not getattr(screenshot, "is_fallback", False)
-        ):
-            return ""
-        getter = getattr(self.device_factory, "get_ui_tree", None)
-        if getter is None:
-            return ""
-        try:
-            tree = getter(self.agent_config.device_id)
-        except Exception as exc:
-            if self.agent_config.verbose:
-                print(f"UI tree unavailable: {exc}")
-            return ""
-        from phone_agent.accessibility import format_ui_tree
-
-        return format_ui_tree(tree)
+        return screenshot, current_app
 
     def _screen_info(self, current_app: str, screenshot: Any) -> str:
         """Describe the screen. A fallback image is not a real screenshot."""
@@ -270,7 +228,7 @@ class PhoneAgent:
         self._step_count += 1
 
         # Capture current screen state
-        screenshot, current_app, ui_text = self._capture_screen_and_app()
+        screenshot, current_app = self._capture_screen_and_app()
 
         # Build messages
         if is_first:
@@ -292,9 +250,6 @@ class PhoneAgent:
                 self._last_observation = None
             else:
                 text_content = f"** Screen Info **\n\n{screen_info}"
-
-        if ui_text:
-            text_content = f"{text_content}{_UI_ELEMENTS_MARKER}{ui_text}"
 
         self._context.append(
             MessageBuilder.create_user_message(
@@ -322,7 +277,7 @@ class PhoneAgent:
                 message=f"Model error: {e}",
             )
         finally:
-            self._context[user_message_index] = _drop_ui_elements(
+            self._context[user_message_index] = (
                 MessageBuilder.remove_images_from_message(
                     self._context[user_message_index]
                 )

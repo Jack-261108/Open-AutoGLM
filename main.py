@@ -318,9 +318,6 @@ Examples:
     # List supported apps
     python main.py --list-apps
 
-    # Read the accessibility tree on every step
-    python main.py --accessibility on
-
     # iOS specific examples
     # Run with iOS device
     python main.py --device-type ios "Open Safari and search for iPhone tips"
@@ -434,17 +431,6 @@ Examples:
     )
 
     parser.add_argument(
-        "--accessibility",
-        type=str.lower,
-        choices=["auto", "on", "off"],
-        default=os.getenv("PHONE_AGENT_ACCESSIBILITY", "auto").lower(),
-        help=(
-            "When to read the accessibility tree: auto (only if the screenshot "
-            "is unavailable), on (every step), off (never). Default: auto"
-        ),
-    )
-
-    parser.add_argument(
         "task",
         nargs="?",
         type=str,
@@ -452,10 +438,6 @@ Examples:
     )
 
     args = parser.parse_args(argv)
-    if args.accessibility:
-        args.accessibility = args.accessibility.lower()
-    if args.accessibility not in {"auto", "on", "off"}:
-        parser.error("--accessibility must be one of: auto, on, off")
     if args.lang:
         args.lang = args.lang.lower()
     if args.lang not in {"cn", "en"}:
@@ -707,7 +689,6 @@ def main(argv: list[str] | None = None) -> None:
                 device_id=args.device_id,
                 verbose=not args.quiet,
                 lang=args.lang,
-                accessibility=args.accessibility,
             )
             agent = IOSPhoneAgent(
                 model_config=model_config,
@@ -728,7 +709,6 @@ def main(argv: list[str] | None = None) -> None:
                 device_type=device_type,
                 verbose=not args.quiet,
                 lang=args.lang,
-                accessibility=args.accessibility,
             )
             agent = PhoneAgent(
                 model_config=model_config,
@@ -749,7 +729,6 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Base URL: {model_config.base_url}")
         print(f"Max Steps: {agent_config.max_steps}")
         print(f"Language: {agent_config.lang}")
-        print(f"Accessibility: {agent_config.accessibility}")
         print(f"Device Type: {args.device_type.upper()}")
 
         # Show iOS-specific config
