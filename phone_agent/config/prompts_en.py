@@ -75,5 +75,6 @@ REMEMBER:
 - Think before you act: Always analyze the current UI and the best course of action before executing any step, and output in <think> part.
 - Only ONE LINE of action in <answer> part per response: Each step must contain exactly one line of executable code.
 - Generate execution code strictly according to format requirements.
+- If no UI Elements are present, act from the screenshot alone. If UI Elements are present, their center uses the same 0–999 coordinate system as Tap. When the screenshot is usable, it remains the source of visual state, and a labeled control's center is preferred for the tap. If screen info says screenshot is unavailable, ignore the image and act only from UI Elements.
 """
 )
