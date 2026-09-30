@@ -9,8 +9,14 @@ from phone_agent.actions import ActionHandler
 from phone_agent.actions.handler import finish, parse_action
 from phone_agent.config import get_messages, get_system_prompt
 from phone_agent.device_factory import DeviceFactory, DeviceType, get_device_factory
-from phone_agent.model import ModelClient, ModelClientProtocol, ModelConfig
-from phone_agent.model.client import MessageBuilder
+from phone_agent.model import (
+    ModelClient,
+    ModelClientProtocol,
+    ModelConfig,
+    ThinkingDelta,
+)
+from phone_agent.model.client import MessageBuilder, _request_accepts_on_event
+from phone_agent.model.spinner import InferenceSpinner
 
 @dataclass
 class AgentConfig:
@@ -118,6 +124,9 @@ class PhoneAgent:
         self._context: list[dict[str, Any]] = []
         self._step_count = 0
         self._last_observation: str | None = None
+        self._client_accepts_on_event = _request_accepts_on_event(
+            self.model_client.request
+        )
 
     def run(self, task: str) -> str:
         """
@@ -258,14 +267,54 @@ class PhoneAgent:
         )
         user_message_index = len(self._context) - 1
         msgs = get_messages(self.agent_config.lang)
+        spinner = InferenceSpinner(
+            message="Thinking and analyzing screen"
+            if self.agent_config.lang == "en"
+            else "正在分析屏幕画面并规划动作"
+        )
 
         # Get model response and always remove the request screenshot afterwards.
         try:
             if self.agent_config.verbose:
                 print("\n" + "=" * 50)
-                print(f"💭 {msgs['thinking']}:")
-                print("-" * 50)
-            response = self.model_client.request(self._context)
+                spinner.start()
+
+            stream_thinking_printed = False
+            thinking_header_printed = False
+
+            def _ensure_thinking_header() -> None:
+                nonlocal thinking_header_printed
+                if not thinking_header_printed and self.agent_config.verbose:
+                    print(f"💭 {msgs['thinking']}:")
+                    print("-" * 50)
+                    thinking_header_printed = True
+
+            def _stream_event_callback(event: Any) -> None:
+                nonlocal stream_thinking_printed
+                spinner.stop()
+                if not self.agent_config.verbose:
+                    return
+                if isinstance(event, ThinkingDelta) and event.text:
+                    _ensure_thinking_header()
+                    print(event.text, end="", flush=True)
+                    stream_thinking_printed = True
+
+            try:
+                if self._client_accepts_on_event:
+                    response = self.model_client.request(
+                        self._context, on_event=_stream_event_callback
+                    )
+                else:
+                    response = self.model_client.request(self._context)
+            finally:
+                spinner.stop()
+
+            if self.agent_config.verbose:
+                if stream_thinking_printed:
+                    print()
+                elif response.thinking:
+                    _ensure_thinking_header()
+                    print(response.thinking)
         except Exception as e:
             if self.agent_config.verbose:
                 traceback.print_exc()
@@ -298,9 +347,33 @@ class PhoneAgent:
             )
 
         if self.agent_config.verbose:
-            print("-" * 50)
+            if thinking_header_printed:
+                print("-" * 50)
             print(f"🎯 {msgs['action']}:")
             print(json.dumps(action, ensure_ascii=False, indent=2))
+            if response.total_time and response.total_time > 0:
+                metrics_parts = []
+                ttft = response.time_to_first_token
+                total = response.total_time
+                if ttft is not None:
+                    metrics_parts.append(
+                        f"首Token: {ttft:.2f}s"
+                        if self.agent_config.lang == "cn"
+                        else f"TTFT: {ttft:.2f}s"
+                    )
+                    stream_time = total - ttft
+                    if stream_time >= 0.05:
+                        metrics_parts.append(
+                            f"生成流: {stream_time:.2f}s"
+                            if self.agent_config.lang == "cn"
+                            else f"Stream: {stream_time:.2f}s"
+                        )
+                metrics_parts.append(
+                    f"总耗时: {total:.2f}s"
+                    if self.agent_config.lang == "cn"
+                    else f"Total: {total:.2f}s"
+                )
+                print(f"⚡ {' | '.join(metrics_parts)}")
             print("=" * 50 + "\n")
 
         # Execute action

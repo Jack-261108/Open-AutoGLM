@@ -6,9 +6,12 @@ from types import SimpleNamespace
 import pytest
 
 from phone_agent.model.base import (
+    ContentDelta,
     ModelConnectionError,
     ModelRequestError,
+    ModelStreamEvent,
     RawToolCall,
+    ThinkingDelta,
     UnsupportedToolsError,
 )
 from phone_agent.model.client import ModelConfig
@@ -288,3 +291,45 @@ def test_close_is_idempotent_and_can_retry_after_close_failure():
     assert client.close_calls == 2
     with pytest.raises(ModelRequestError, match="closed"):
         adapter.request([], use_tools=False)
+
+
+def test_openai_compatible_streaming_events():
+    stream_chunks = [
+        chunk(reasoning="think step 1 "),
+        chunk(reasoning="think step 2"),
+        chunk(content="do(action="),
+        chunk(content="'Back')"),
+    ]
+    client = FakeClient(stream_chunks)
+    adapter = OpenAICompatibleAdapter(ModelConfig(), client=client)
+    events: list[ModelStreamEvent] = []
+
+    output = adapter.request([], use_tools=False, on_event=events.append)
+
+    assert output.thinking == "think step 1 think step 2"
+    assert output.final_text == "do(action='Back')"
+    assert events == [
+        ThinkingDelta("think step 1 "),
+        ThinkingDelta("think step 2"),
+        ContentDelta("do(action="),
+        ContentDelta("'Back')"),
+    ]
+
+
+def test_openai_compatible_streaming_think_tags_in_content():
+    stream_chunks = [
+        chunk(content="<think>internal "),
+        chunk(content="reasoning</think>do(action='Home')"),
+    ]
+    client = FakeClient(stream_chunks)
+    adapter = OpenAICompatibleAdapter(ModelConfig(), client=client)
+    events: list[ModelStreamEvent] = []
+
+    output = adapter.request([], use_tools=False, on_event=events.append)
+
+    assert "<think>" in output.raw_content
+    thinking_deltas = [e.text for e in events if isinstance(e, ThinkingDelta)]
+    content_deltas = [e.text for e in events if isinstance(e, ContentDelta)]
+    assert "".join(thinking_deltas) == "internal reasoning"
+    assert "".join(content_deltas) == "do(action='Home')"
+

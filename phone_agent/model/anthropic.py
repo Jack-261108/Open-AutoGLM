@@ -9,12 +9,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from phone_agent.model.base import (
+    ContentDelta,
     ModelConfigurationError,
     ModelConnectionError,
     ModelRequestError,
     ModelResponseError,
     RawModelOutput,
     RawToolCall,
+    StreamCallback,
+    ThinkingDelta,
+    ToolCallDelta,
     UnsupportedToolsError,
     get_error_body,
     get_error_status_code,
@@ -241,7 +245,11 @@ class AnthropicAdapter:
         return index
 
     def request(
-        self, messages: list[dict[str, Any]], *, use_tools: bool
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        use_tools: bool,
+        on_event: StreamCallback | None = None,
     ) -> RawModelOutput:
         if self._closed:
             raise ModelRequestError("AnthropicAdapter is closed")
@@ -302,6 +310,8 @@ class AnthropicAdapter:
                             final_parts.append(initial)
                             raw_parts.append(initial)
                             mark_output(ends_thinking=True)
+                            if on_event is not None:
+                                on_event(ContentDelta(initial))
                     elif block_type == "thinking":
                         state = _BlockState(kind="thinking")
                         initial = _get(content_block, "thinking", "")
@@ -314,6 +324,8 @@ class AnthropicAdapter:
                             thinking_parts.append(initial)
                             raw_parts.append(initial)
                             mark_output()
+                            if on_event is not None:
+                                on_event(ThinkingDelta(initial))
                     elif block_type == "redacted_thinking":
                         state = _BlockState(kind="redacted_thinking")
                     elif block_type == "tool_use":
@@ -360,6 +372,8 @@ class AnthropicAdapter:
                         raw_parts.append(text)
                         if text:
                             mark_output(ends_thinking=True)
+                            if on_event is not None:
+                                on_event(ContentDelta(text))
                     elif delta_type == "thinking_delta" and state.kind == "thinking":
                         thinking = _get(delta, "thinking")
                         if not isinstance(thinking, str):
@@ -371,6 +385,8 @@ class AnthropicAdapter:
                         raw_parts.append(thinking)
                         if thinking:
                             mark_output()
+                            if on_event is not None:
+                                on_event(ThinkingDelta(thinking))
                     elif delta_type == "signature_delta" and state.kind == "thinking":
                         signature = _get(delta, "signature")
                         if not isinstance(signature, str):
@@ -387,6 +403,14 @@ class AnthropicAdapter:
                         state.partial_json.append(partial)
                         if partial:
                             mark_output(ends_thinking=True)
+                            if on_event is not None:
+                                on_event(
+                                    ToolCallDelta(
+                                        index=index,
+                                        name=state.name,
+                                        arguments_delta=partial,
+                                    )
+                                )
                     else:
                         raise ModelResponseError(
                             "Anthropic delta type does not match its content block"

@@ -24,7 +24,7 @@ class FakeModelClient:
         self.results = deque(results)
         self.requests = []
 
-    def request(self, messages):
+    def request(self, messages, *, on_event=None):
         self.requests.append(deepcopy(messages))
         result = self.results.popleft()
         if isinstance(result, BaseException):

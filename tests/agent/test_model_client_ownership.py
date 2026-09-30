@@ -8,6 +8,7 @@ import phone_agent.agent as android_module
 import phone_agent.agent_ios as ios_module
 from phone_agent.agent import AgentConfig, PhoneAgent
 from phone_agent.agent_ios import IOSAgentConfig, IOSPhoneAgent
+from phone_agent.model import ModelResponse
 
 
 _MISSING = object()
@@ -15,12 +16,12 @@ _MISSING = object()
 
 class OwnedClient:
     def __init__(self, response=None, close_error=None):
-        self.response = response
+        self.response = response if response is not None else ModelResponse("", "", "")
         self.close_error = close_error
         self.request_calls = 0
         self.close_calls = 0
 
-    def request(self, messages):
+    def request(self, messages, *, on_event=None):
         self.request_calls += 1
         return self.response
 
@@ -41,7 +42,7 @@ class RequestOnlyClient:
         self.response = response
         self.request_calls = 0
 
-    def request(self, messages):
+    def request(self, messages, *, on_event=None):
         self.request_calls += 1
         return self.response
 

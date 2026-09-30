@@ -358,3 +358,88 @@ def test_phone_agent_ios_creates_wda_session_when_missing(
     assert agent.agent_config.session_id == "session-created"
     assert agent.device_factory.session_id == "session-created"
 
+
+def test_phone_agent_verbose_streaming_thinking(
+    capsys,
+    build_agent,
+    response_factory,
+):
+    from phone_agent.model import ThinkingDelta
+
+    class StreamingModelClient:
+        def request(self, messages, *, on_event=None):
+            if on_event:
+                on_event(ThinkingDelta("streaming thoughts"))
+            return response_factory(
+                thinking="streaming thoughts",
+                parsed_action={"_metadata": "finish", "message": "done"},
+            )
+
+    agent, _ = build_agent(StreamingModelClient(), verbose=True)
+    agent.step("do something")
+
+    captured = capsys.readouterr()
+    assert "streaming thoughts" in captured.out
+
+
+def test_phone_agent_verbose_no_thinking_hides_header(
+    capsys,
+    build_agent,
+    response_factory,
+):
+    """When the model emits no thinking, the thinking header must not appear."""
+
+    class NoThinkingModelClient:
+        def request(self, _messages, *, on_event=None):
+            # Model emits no ThinkingDelta events and returns empty thinking.
+            _ = on_event
+            return response_factory(
+                thinking="",
+                parsed_action={"_metadata": "finish", "message": "done"},
+            )
+
+    agent, _ = build_agent(NoThinkingModelClient(), verbose=True)
+    agent.step("do something")
+
+    captured = capsys.readouterr()
+    assert "💭" not in captured.out
+    assert "思考过程" not in captured.out
+
+
+def test_phone_agent_supports_kwargs_and_legacy_clients(
+    build_agent,
+    response_factory,
+):
+    """Clients accepting **kwargs or strictly messages should both work seamlessly."""
+    from phone_agent.model import ThinkingDelta
+
+    class KwargsClient:
+        def __init__(self):
+            self.received_on_event = False
+
+        def request(self, _messages, **kwargs):
+            if "on_event" in kwargs and kwargs["on_event"] is not None:
+                self.received_on_event = True
+                kwargs["on_event"](ThinkingDelta("kwargs thoughts"))
+            return response_factory(
+                thinking="kwargs thoughts",
+                parsed_action={"_metadata": "finish", "message": "done"},
+            )
+
+    kwargs_client = KwargsClient()
+    agent1, _ = build_agent(kwargs_client, verbose=False)
+    agent1.step("step1")
+    assert kwargs_client.received_on_event is True
+
+    class StrictLegacyClient:
+        def request(self, _messages):
+            return response_factory(
+                thinking="legacy thoughts",
+                parsed_action={"_metadata": "finish", "message": "done"},
+            )
+
+    agent2, _ = build_agent(StrictLegacyClient(), verbose=False)
+    result2 = agent2.step("step2")
+    assert result2.thinking == "legacy thoughts"
+
+

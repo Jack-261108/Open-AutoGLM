@@ -3,12 +3,48 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, Union
 
 if TYPE_CHECKING:
     from phone_agent.model.client import ModelResponse
+
+
+@dataclass(frozen=True)
+class ThinkingDelta:
+    """Incremental thinking text emitted by the model."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class ContentDelta:
+    """Incremental content or action text emitted by the model."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class ToolCallDelta:
+    """Incremental tool call fragment emitted by the model."""
+
+    index: int
+    name: str | None = None
+    arguments_delta: str = ""
+
+
+@dataclass(frozen=True)
+class StreamCompleted:
+    """Stream completion metadata."""
+
+    time_to_first_token: float | None = None
+    time_to_thinking_end: float | None = None
+    total_time: float = 0.0
+
+
+ModelStreamEvent = Union[ThinkingDelta, ContentDelta, ToolCallDelta, StreamCompleted]
+StreamCallback = Callable[[ModelStreamEvent], None]
 
 
 @dataclass
@@ -36,7 +72,11 @@ class ModelAdapter(Protocol):
     """Complete transport adapter contract used by the model facade."""
 
     def request(
-        self, messages: list[dict[str, Any]], *, use_tools: bool
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        use_tools: bool,
+        on_event: StreamCallback | None = None,
     ) -> RawModelOutput:
         """Send messages and return normalized provider output."""
         ...
@@ -53,7 +93,12 @@ class ModelAdapter(Protocol):
 class ModelClientProtocol(Protocol):
     """Minimal model client contract required by agents."""
 
-    def request(self, messages: list[dict[str, Any]]) -> ModelResponse:
+    def request(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        on_event: StreamCallback | None = None,
+    ) -> ModelResponse:
         """Send messages and return a parsed model response."""
         ...
 

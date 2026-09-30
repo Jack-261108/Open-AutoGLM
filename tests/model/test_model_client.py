@@ -2,6 +2,7 @@
 
 import builtins
 from collections import deque
+from typing import Any, cast
 
 import pytest
 
@@ -9,22 +10,28 @@ from phone_agent.model.base import (
     ModelConfigurationError,
     ModelConnectionError,
     ModelRequestError,
+    ModelStreamEvent,
     RawModelOutput,
+    StreamCompleted,
+    ThinkingDelta,
     UnsupportedToolsError,
 )
 from phone_agent.model.client import ModelClient, ModelConfig
 
 
 class FakeAdapter:
-    def __init__(self, *results, close_error=None):
+    def __init__(self, *results, close_error=None, emit_thinking=None):
         self.results = deque(results)
         self.requests = []
         self.connection_checks = 0
         self.close_calls = 0
         self.close_error = close_error
+        self.emit_thinking = emit_thinking
 
-    def request(self, messages, *, use_tools):
+    def request(self, messages, *, use_tools, on_event=None):
         self.requests.append((messages, use_tools))
+        if on_event is not None and self.emit_thinking:
+            on_event(ThinkingDelta(self.emit_thinking))
         result = self.results.popleft()
         if isinstance(result, BaseException):
             raise result
@@ -171,3 +178,64 @@ def test_default_factory_reports_missing_adapter_only_on_client_construction(
 
     with pytest.raises(ModelConfigurationError, match="provider 'openai'.*not available"):
         ModelClient(config)
+
+
+def test_model_client_emits_stream_events_and_completion():
+    adapter = FakeAdapter(output(), emit_thinking="deep thoughts")
+    client = ModelClient(adapter=adapter)
+    events: list[ModelStreamEvent] = []
+
+    response = client.request([{"role": "user", "content": "hello"}], on_event=events.append)
+
+    assert response.action == "do(action='Back')"
+    assert len(events) == 2
+    assert events[0] == ThinkingDelta("deep thoughts")
+    assert isinstance(events[1], StreamCompleted)
+    assert events[1].time_to_first_token == 0.1
+    assert events[1].total_time == 0.3
+
+
+def test_model_client_adapter_with_kwargs_and_legacy_signature():
+    class KwargsAdapter:
+        def __init__(self):
+            self.received_on_event = False
+
+        def request(self, messages: Any, *, use_tools: bool = False, **kwargs: Any) -> RawModelOutput:
+            _ = (messages, use_tools)
+            if "on_event" in kwargs and kwargs["on_event"] is not None:
+                self.received_on_event = True
+                kwargs["on_event"](ThinkingDelta("from kwargs adapter"))
+            return output()
+
+        def check_connection(self):
+            pass
+
+        def close(self):
+            pass
+
+    kwargs_adapter = KwargsAdapter()
+    client = ModelClient(adapter=cast(Any, kwargs_adapter))
+    events: list[ModelStreamEvent] = []
+    client.request([{"role": "user", "content": "hi"}], on_event=events.append)
+    assert kwargs_adapter.received_on_event is True
+    assert events[0] == ThinkingDelta("from kwargs adapter")
+
+    class StrictLegacyAdapter:
+        def request(self, messages: Any, *, use_tools: bool = False) -> RawModelOutput:
+            _ = (messages, use_tools)
+            return output()
+
+        def check_connection(self):
+            pass
+
+        def close(self):
+            pass
+
+    legacy_adapter = StrictLegacyAdapter()
+    client2 = ModelClient(adapter=cast(Any, legacy_adapter))
+    events2: list[ModelStreamEvent] = []
+    resp2 = client2.request([{"role": "user", "content": "hi"}], on_event=events2.append)
+    assert resp2.action == "do(action='Back')"
+    assert len(events2) == 1
+    assert isinstance(events2[0], StreamCompleted)
+

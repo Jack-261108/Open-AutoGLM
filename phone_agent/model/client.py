@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import math
 import time
@@ -15,6 +16,9 @@ from phone_agent.model.base import (
     ModelConfigurationError,
     ModelConnectionError,
     ModelRequestError,
+    RawModelOutput,
+    StreamCallback,
+    StreamCompleted,
     UnsupportedToolsError,
 )
 from phone_agent.model.response_parser import parse_model_output
@@ -238,6 +242,16 @@ def _default_adapter_factory(config: ModelConfig, verbose: bool) -> ModelAdapter
     return adapter_class(config, verbose=verbose)
 
 
+def _request_accepts_on_event(request_fn: Any) -> bool:
+    try:
+        sig = inspect.signature(request_fn)
+        return "on_event" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+    except (ValueError, TypeError):
+        return False
+
+
 class ModelClient:
     """Compatibility facade that selects tools and parses adapter output."""
 
@@ -256,26 +270,55 @@ class ModelClient:
             else _default_adapter_factory(self.config, verbose)
         )
         self._closed = False
+        self._adapter_accepts_on_event = _request_accepts_on_event(
+            self.adapter.request
+        )
 
     def _ensure_open_for_request(self) -> None:
         if self._closed:
             raise ModelRequestError("ModelClient is closed")
 
-    def request(self, messages: list[dict[str, Any]]) -> ModelResponse:
+    def _request_adapter(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        use_tools: bool,
+        on_event: StreamCallback | None,
+    ) -> RawModelOutput:
+        if self._adapter_accepts_on_event:
+            return self.adapter.request(
+                messages, use_tools=use_tools, on_event=on_event
+            )
+        return self.adapter.request(messages, use_tools=use_tools)
+
+    def request(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        on_event: StreamCallback | None = None,
+    ) -> ModelResponse:
         """Request one action, applying the configured tool fallback policy."""
 
         self._ensure_open_for_request()
         if self.config.tool_mode == "text":
-            raw_output = self.adapter.request(messages, use_tools=False)
+            raw_output = self._request_adapter(
+                messages, use_tools=False, on_event=on_event
+            )
         elif self.config.tool_mode == "native":
-            raw_output = self.adapter.request(messages, use_tools=True)
+            raw_output = self._request_adapter(
+                messages, use_tools=True, on_event=on_event
+            )
         else:
             first_attempt_started = time.monotonic()
             try:
-                raw_output = self.adapter.request(messages, use_tools=True)
+                raw_output = self._request_adapter(
+                    messages, use_tools=True, on_event=on_event
+                )
             except UnsupportedToolsError:
                 first_attempt_time = time.monotonic() - first_attempt_started
-                fallback_output = self.adapter.request(messages, use_tools=False)
+                fallback_output = self._request_adapter(
+                    messages, use_tools=False, on_event=on_event
+                )
                 raw_output = replace(
                     fallback_output,
                     time_to_first_token=(
@@ -290,6 +333,15 @@ class ModelClient:
                     ),
                     total_time=first_attempt_time + fallback_output.total_time,
                 )
+
+        if on_event is not None:
+            on_event(
+                StreamCompleted(
+                    time_to_first_token=raw_output.time_to_first_token,
+                    time_to_thinking_end=raw_output.time_to_thinking_end,
+                    total_time=raw_output.total_time,
+                )
+            )
 
         parsed = parse_model_output(raw_output)
         return ModelResponse(

@@ -8,10 +8,13 @@ import pytest
 
 from phone_agent.model.anthropic import AnthropicAdapter
 from phone_agent.model.base import (
+    ContentDelta,
     ModelConnectionError,
     ModelRequestError,
     ModelResponseError,
+    ModelStreamEvent,
     RawToolCall,
+    ThinkingDelta,
     UnsupportedToolsError,
 )
 from phone_agent.model.client import ModelConfig
@@ -443,3 +446,34 @@ def test_close_is_idempotent_and_retryable_after_failure():
     assert client.close_calls == 2
     with pytest.raises(ModelRequestError, match="closed"):
         adapter.request([], use_tools=False)
+
+
+def test_anthropic_streaming_events():
+    stream_events = [
+        event("message_start"),
+        block_start(0, "thinking"),
+        delta(0, "thinking_delta", thinking="step 1 thinking "),
+        delta(0, "thinking_delta", thinking="step 2 thinking"),
+        block_stop(0),
+        block_start(1, "text"),
+        delta(1, "text_delta", text="do(action="),
+        delta(1, "text_delta", text="'Back')"),
+        block_stop(1),
+        event("message_delta"),
+        event("message_stop"),
+    ]
+    client = FakeClient(stream_events)
+    adapter = AnthropicAdapter(config(), client=client)
+    emitted: list[ModelStreamEvent] = []
+
+    output = adapter.request([], use_tools=False, on_event=emitted.append)
+
+    assert output.thinking == "step 1 thinking step 2 thinking"
+    assert output.final_text == "do(action='Back')"
+    assert emitted == [
+        ThinkingDelta("step 1 thinking "),
+        ThinkingDelta("step 2 thinking"),
+        ContentDelta("do(action="),
+        ContentDelta("'Back')"),
+    ]
+

@@ -7,10 +7,13 @@ import httpx
 import pytest
 
 from phone_agent.model.base import (
+    ContentDelta,
     ModelConnectionError,
     ModelRequestError,
     ModelResponseError,
+    ModelStreamEvent,
     RawToolCall,
+    ThinkingDelta,
     UnsupportedToolsError,
 )
 from phone_agent.model.client import ModelClient, ModelConfig
@@ -455,3 +458,29 @@ def test_close_is_idempotent_and_closed_adapter_rejects_operations():
         adapter.request([], use_tools=False)
     with pytest.raises(ModelConnectionError, match="closed"):
         adapter.check_connection()
+
+
+def test_ollama_streaming_events():
+    model_config = config()
+    response = ndjson_response(
+        {"message": {"thinking": "ollama thinking 1 "}},
+        {"message": {"thinking": "ollama thinking 2"}},
+        {"message": {"content": "do(action="}},
+        {"message": {"content": "'Back')"}},
+        {"done": True},
+    )
+    client = mock_client(lambda request: response, model_config)
+    adapter = OllamaAdapter(model_config, client=client)
+    events: list[ModelStreamEvent] = []
+
+    output = adapter.request([], use_tools=False, on_event=events.append)
+
+    assert output.thinking == "ollama thinking 1 ollama thinking 2"
+    assert output.final_text == "do(action='Back')"
+    assert events == [
+        ThinkingDelta("ollama thinking 1 "),
+        ThinkingDelta("ollama thinking 2"),
+        ContentDelta("do(action="),
+        ContentDelta("'Back')"),
+    ]
+

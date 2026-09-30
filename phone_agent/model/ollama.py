@@ -11,12 +11,16 @@ from typing import Any
 import httpx
 
 from phone_agent.model.base import (
+    ContentDelta,
     ModelConfigurationError,
     ModelConnectionError,
     ModelRequestError,
     ModelResponseError,
     RawModelOutput,
     RawToolCall,
+    StreamCallback,
+    ThinkingDelta,
+    ToolCallDelta,
 )
 from phone_agent.model.client import ModelConfig
 from phone_agent.model.tool_schema import decode_json_object, get_tool_schemas
@@ -229,7 +233,11 @@ class OllamaAdapter:
         return error_type("Ollama request failed")
 
     def request(
-        self, messages: list[dict[str, Any]], *, use_tools: bool
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        use_tools: bool,
+        on_event: StreamCallback | None = None,
     ) -> RawModelOutput:
         if self._closed:
             raise ModelRequestError("OllamaAdapter is closed")
@@ -280,6 +288,8 @@ class OllamaAdapter:
                         thinking_parts.append(thinking)
                         raw_parts.append(thinking)
                         mark_output()
+                        if on_event is not None:
+                            on_event(ThinkingDelta(thinking))
 
                     content = message.get("content", "")
                     if not isinstance(content, str):
@@ -288,6 +298,8 @@ class OllamaAdapter:
                         final_parts.append(content)
                         raw_parts.append(content)
                         mark_output(ends_thinking=True)
+                        if on_event is not None:
+                            on_event(ContentDelta(content))
 
                     tool_calls = message.get("tool_calls", payload.get("tool_calls", []))
                     if tool_calls is None:
@@ -311,6 +323,7 @@ class OllamaAdapter:
                                 tool_call_order.append(index)
                             buffer = indexed_tool_buffers[index]
                         else:
+                            index = len(tool_call_order)
                             buffer = _ToolCallBuffer()
 
                         function = tool_call.get("function")
@@ -318,14 +331,27 @@ class OllamaAdapter:
                             raise ModelResponseError(
                                 "Ollama tool call requires a function object"
                             )
-                        emitted = buffer.add_name(function.get("name"))
-                        emitted = buffer.add_arguments(
-                            function.get("arguments")
-                        ) or emitted
+                        tool_name = function.get("name")
+                        tool_args = function.get("arguments")
+                        emitted = buffer.add_name(tool_name)
+                        emitted = buffer.add_arguments(tool_args) or emitted
                         if not has_explicit_index:
                             tool_call_order.append(buffer.build())
                         if emitted:
                             mark_output(ends_thinking=True)
+                            if on_event is not None:
+                                arg_str = (
+                                    tool_args
+                                    if isinstance(tool_args, str)
+                                    else ""
+                                )
+                                on_event(
+                                    ToolCallDelta(
+                                        index=index,
+                                        name=tool_name,
+                                        arguments_delta=arg_str,
+                                    )
+                                )
 
                     done = payload.get("done", False)
                     if not isinstance(done, bool):

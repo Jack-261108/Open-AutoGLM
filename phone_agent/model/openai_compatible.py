@@ -13,12 +13,16 @@ from phone_agent.model.base import (
     ModelResponseError,
     RawModelOutput,
     RawToolCall,
+    StreamCallback,
+    ThinkingDelta,
+    ToolCallDelta,
     UnsupportedToolsError,
     get_error_body,
     get_error_status_code,
     is_unsupported_tools_error_response,
 )
 from phone_agent.model.client import ModelConfig
+from phone_agent.model.stream_filter import StreamingThinkingDetector
 from phone_agent.model.tool_schema import get_tool_schemas
 
 
@@ -193,7 +197,11 @@ class OpenAICompatibleAdapter:
         return ModelRequestError("OpenAI-compatible request failed")
 
     def request(
-        self, messages: list[dict[str, Any]], *, use_tools: bool
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        use_tools: bool,
+        on_event: StreamCallback | None = None,
     ) -> RawModelOutput:
         if self._closed:
             raise ModelRequestError("OpenAICompatibleAdapter is closed")
@@ -205,6 +213,7 @@ class OpenAICompatibleAdapter:
         final_parts: list[str] = []
         raw_parts: list[str] = []
         tool_buffers: dict[int, _ToolCallBuffer] = {}
+        detector = StreamingThinkingDetector(on_event)
         emitted_output = False
         safe_error: BaseException | None = None
 
@@ -234,6 +243,8 @@ class OpenAICompatibleAdapter:
                         thinking_parts.append(reasoning)
                         raw_parts.append(reasoning)
                         emitted_output = True
+                        if on_event is not None:
+                            on_event(ThinkingDelta(reasoning))
 
                 content = _get(delta, "content")
                 if content is not None:
@@ -245,6 +256,7 @@ class OpenAICompatibleAdapter:
                         final_parts.append(content)
                         raw_parts.append(content)
                         emitted_output = True
+                        detector.feed(content)
 
                 tool_deltas = _get(delta, "tool_calls", []) or []
                 if tool_deltas:
@@ -261,17 +273,26 @@ class OpenAICompatibleAdapter:
                     if function is None:
                         continue
                     buffer = tool_buffers.setdefault(index, _ToolCallBuffer())
-                    tool_emitted = buffer.add(
-                        _get(function, "name"),
-                        _get(function, "arguments"),
-                    )
+                    tool_name = _get(function, "name")
+                    tool_args = _get(function, "arguments")
+                    tool_emitted = buffer.add(tool_name, tool_args)
                     if tool_emitted:
                         if thinking_parts and time_to_thinking_end is None:
                             time_to_thinking_end = time.monotonic() - started
                         emitted_output = True
+                        if on_event is not None:
+                            arg_delta = tool_args if isinstance(tool_args, str) else ""
+                            on_event(
+                                ToolCallDelta(
+                                    index=index,
+                                    name=tool_name,
+                                    arguments_delta=arg_delta,
+                                )
+                            )
 
                 if emitted_output and time_to_first_token is None:
                     time_to_first_token = time.monotonic() - started
+            detector.flush()
         except Exception as exc:
             normalized = self._normalize_error(exc, zero_output=not emitted_output)
             if normalized is exc:
