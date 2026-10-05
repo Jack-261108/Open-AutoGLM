@@ -232,3 +232,48 @@ def test_ios_swipe_keeps_distance_based_duration(monkeypatch):
 
     assert result.success is True
     assert mock_swipe.call_args.kwargs["duration"] is None
+
+
+def test_android_action_handler_clipboard_and_lifecycle():
+    fake_device = MagicMock()
+    fake_device.get_clipboard.return_value = "my clipboard text"
+
+    handler = ActionHandler(device_factory=fake_device)
+
+    # 1. Set_Clipboard
+    res_set = handler.execute(
+        {"_metadata": "do", "action": "Set_Clipboard", "text": "paste this"},
+        1080,
+        2400,
+    )
+    assert res_set.success is True
+    fake_device.set_clipboard.assert_called_once_with("paste this", None)
+
+    # 2. Get_Clipboard
+    res_get = handler.execute(
+        {"_metadata": "do", "action": "Get_Clipboard"},
+        1080,
+        2400,
+    )
+    assert res_get.success is True
+    assert "my clipboard text" in (res_get.observation or "")
+    fake_device.get_clipboard.assert_called_once_with(None)
+
+    # 3. Force_Stop
+    res_stop = handler.execute(
+        {"_metadata": "do", "action": "Force_Stop", "app": "微信"},
+        1080,
+        2400,
+    )
+    assert res_stop.success is True
+    fake_device.force_stop_app.assert_called_once_with("微信", None)
+
+    # 4. Clear_Data
+    res_clear = handler.execute(
+        {"_metadata": "do", "action": "Clear_Data", "app": "com.tencent.mm"},
+        1080,
+        2400,
+    )
+    assert res_clear.success is True
+    fake_device.clear_app_data.assert_called_once_with("com.tencent.mm", None)
+

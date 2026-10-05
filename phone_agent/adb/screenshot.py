@@ -28,6 +28,10 @@ def get_screenshot(device_id: str | None = None, timeout: int = 10) -> Screensho
     """
     Capture a screenshot from the connected Android device.
 
+    Uses `adb exec-out screencap -p` for fast streaming directly into memory,
+    avoiding on-device file writing and local disk I/O. Automatically falls back
+    to `screencap -p /sdcard/...` with `adb pull` on older or restricted devices.
+
     Args:
         device_id: Optional ADB device ID for multi-device setups.
         timeout: Timeout in seconds for screenshot operations.
@@ -39,11 +43,40 @@ def get_screenshot(device_id: str | None = None, timeout: int = 10) -> Screensho
         If the screenshot fails (e.g., on sensitive screens like payment pages),
         a black fallback image is returned with is_sensitive=True.
     """
-    temp_path = os.path.join(tempfile.gettempdir(), f"screenshot_{uuid.uuid4()}.png")
     adb_prefix = _get_adb_prefix(device_id)
 
+    # 1. Fast path: stream PNG directly via adb exec-out into memory (zero tempfile, zero pull)
     try:
-        # Execute screenshot command
+        result = subprocess.run(
+            adb_prefix + ["exec-out", "screencap", "-p"],
+            capture_output=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+        )
+
+        stdout = result.stdout or b""
+        stderr = result.stderr or b""
+
+        # Check for sensitive screen indicator
+        if b"Status: -1" in stdout or b"Status: -1" in stderr or b"Failed" in stdout:
+            return _create_fallback_screenshot(is_sensitive=True)
+
+        if result.returncode == 0 and stdout.startswith(b"\x89PNG\r\n\x1a\n"):
+            img = Image.open(BytesIO(stdout))
+            width, height = img.size
+            base64_data = base64.b64encode(stdout).decode("ascii")
+            return Screenshot(
+                base64_data=base64_data,
+                width=width,
+                height=height,
+                is_sensitive=False,
+            )
+    except Exception as e:
+        print(f"Streaming screenshot failed, falling back: {e}", file=sys.stderr)
+
+    # 2. Fallback path: write to /sdcard/tmp.png and pull (for older/non-exec-out environments)
+    temp_path = os.path.join(tempfile.gettempdir(), f"screenshot_{uuid.uuid4()}.png")
+    try:
         result = subprocess.run(
             adb_prefix + ["shell", "screencap", "-p", "/sdcard/tmp.png"],
             capture_output=True,
@@ -52,12 +85,10 @@ def get_screenshot(device_id: str | None = None, timeout: int = 10) -> Screensho
             stdin=subprocess.DEVNULL,
         )
 
-        # Check for screenshot failure (sensitive screen)
-        output = result.stdout + result.stderr
+        output = (result.stdout or "") + (result.stderr or "")
         if "Status: -1" in output or "Failed" in output:
             return _create_fallback_screenshot(is_sensitive=True)
 
-        # Pull screenshot to local temp path
         subprocess.run(
             adb_prefix + ["pull", "/sdcard/tmp.png", temp_path],
             capture_output=True,
@@ -69,7 +100,6 @@ def get_screenshot(device_id: str | None = None, timeout: int = 10) -> Screensho
         if not os.path.exists(temp_path):
             return _create_fallback_screenshot(is_sensitive=False)
 
-        # Read and encode image
         img = Image.open(temp_path)
         width, height = img.size
 
@@ -77,15 +107,18 @@ def get_screenshot(device_id: str | None = None, timeout: int = 10) -> Screensho
         img.save(buffered, format="PNG")
         base64_data = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-        # Cleanup
         os.remove(temp_path)
 
         return Screenshot(
             base64_data=base64_data, width=width, height=height, is_sensitive=False
         )
-
     except Exception as e:
-        print(f"Screenshot error: {e}", file=sys.stderr)
+        print(f"Fallback screenshot error: {e}", file=sys.stderr)
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
         return _create_fallback_screenshot(is_sensitive=False)
 
 

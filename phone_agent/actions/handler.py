@@ -129,6 +129,14 @@ class ActionHandler:
             "Note": self._handle_note,
             "Call_API": self._handle_call_api,
             "Interact": self._handle_interact,
+            "Set_Clipboard": self._handle_set_clipboard,
+            "Set Clipboard": self._handle_set_clipboard,
+            "Get_Clipboard": self._handle_get_clipboard,
+            "Get Clipboard": self._handle_get_clipboard,
+            "Force_Stop": self._handle_force_stop,
+            "Force Stop": self._handle_force_stop,
+            "Clear_Data": self._handle_clear_data,
+            "Clear Data": self._handle_clear_data,
         }
         return handlers.get(action_name)
 
@@ -419,6 +427,57 @@ class ActionHandler:
             should_finish=False,
             message=message or "User interaction handled",
             observation=obs,
+        )
+
+    def _handle_set_clipboard(self, action: dict, width: int, height: int) -> ActionResult:
+        """Handle setting system clipboard."""
+        text = action.get("text", "")
+        device_factory = self._get_device_factory()
+        device_factory.set_clipboard(text, self.device_id)
+        return ActionResult(
+            success=True,
+            should_finish=False,
+            message=f"Copied {len(text)} chars to clipboard",
+            observation=f"Clipboard set with {len(text)} characters.",
+        )
+
+    def _handle_get_clipboard(self, action: dict, width: int, height: int) -> ActionResult:
+        """Handle reading system clipboard."""
+        device_factory = self._get_device_factory()
+        content = device_factory.get_clipboard(self.device_id)
+        return ActionResult(
+            success=True,
+            should_finish=False,
+            message="Read clipboard content",
+            observation=f"Clipboard content:\n{content}",
+        )
+
+    def _handle_force_stop(self, action: dict, width: int, height: int) -> ActionResult:
+        """Handle force stopping an app."""
+        app = action.get("app")
+        if not app:
+            return ActionResult(False, False, "No app specified to force stop")
+        device_factory = self._get_device_factory()
+        device_factory.force_stop_app(app, self.device_id)
+        return ActionResult(
+            success=True,
+            should_finish=False,
+            message=f"Force stopped {app}",
+            observation=f"Application {app} force stopped.",
+        )
+
+    def _handle_clear_data(self, action: dict, width: int, height: int) -> ActionResult:
+        """Handle clearing app data."""
+        app = action.get("app")
+        if not app:
+            return ActionResult(False, False, "No app specified to clear data")
+        device_factory = self._get_device_factory()
+        device_factory.clear_app_data(app, self.device_id)
+        return ActionResult(
+            success=True,
+            should_finish=False,
+            message=f"Cleared data for {app}",
+            observation=f"Application data and cache cleared for {app}.",
         )
 
     def _send_keyevent(self, keycode: str) -> None:
