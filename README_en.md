@@ -79,6 +79,8 @@ Then check the connection with `/mcp` inside Claude Code and simply give it a ta
 | `force_stop_app` | app | Force stop an app by name or package (e.g. to recover from crashes) |
 | `clear_app_data` | app | Clear all data and cache for an app (resets to initial state for testing) |
 | `install_app` | path | Install a local APK file onto the device (`-r` reinstall) |
+| `get_orientation` | - | Get current screen orientation and rotation status (portrait/landscape, rotation code) |
+| `set_orientation` | orientation | Set or lock screen orientation ("portrait", "landscape", or "auto") |
 | `wait` | seconds=1.0 | Wait for the screen to change (0.1–30 s) |
 
 **Example: playing military chess**

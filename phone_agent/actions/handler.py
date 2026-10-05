@@ -137,6 +137,8 @@ class ActionHandler:
             "Force Stop": self._handle_force_stop,
             "Clear_Data": self._handle_clear_data,
             "Clear Data": self._handle_clear_data,
+            "Set_Orientation": self._handle_set_orientation,
+            "Set Orientation": self._handle_set_orientation,
         }
         return handlers.get(action_name)
 
@@ -478,6 +480,18 @@ class ActionHandler:
             should_finish=False,
             message=f"Cleared data for {app}",
             observation=f"Application data and cache cleared for {app}.",
+        )
+
+    def _handle_set_orientation(self, action: dict, width: int, height: int) -> ActionResult:
+        """Handle setting screen orientation (portrait / landscape / auto)."""
+        orientation = action.get("orientation", "portrait")
+        device_factory = self._get_device_factory()
+        device_factory.set_orientation(orientation, self.device_id)
+        return ActionResult(
+            success=True,
+            should_finish=False,
+            message=f"Set orientation to {orientation}",
+            observation=f"Screen orientation set to {orientation}.",
         )
 
     def _send_keyevent(self, keycode: str) -> None:

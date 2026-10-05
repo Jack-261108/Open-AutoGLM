@@ -277,3 +277,13 @@ def test_android_action_handler_clipboard_and_lifecycle():
     assert res_clear.success is True
     fake_device.clear_app_data.assert_called_once_with("com.tencent.mm", None)
 
+    # 5. Set_Orientation
+    res_orient = handler.execute(
+        {"_metadata": "do", "action": "Set_Orientation", "orientation": "landscape"},
+        1080,
+        2400,
+    )
+    assert res_orient.success is True
+    fake_device.set_orientation.assert_called_once_with("landscape", None)
+
+

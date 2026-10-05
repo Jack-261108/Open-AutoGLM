@@ -527,3 +527,75 @@ def test_batch_actions_with_force_stop(toolkit, fake_factory):
     fake_factory.force_stop_app.assert_called_once_with("微信", DEVICE_ID)
 
 
+# ----------------------------------------------------------------------
+# Orientation tools
+# ----------------------------------------------------------------------
+
+
+def test_get_orientation_success(toolkit, fake_factory):
+    fake_factory.get_orientation.return_value = {
+        "orientation": "landscape",
+        "rotation": 1,
+        "is_landscape": True,
+    }
+    res = toolkit.get_orientation()
+    assert res["orientation"] == "landscape"
+    assert res["is_landscape"] is True
+    fake_factory.get_orientation.assert_called_once_with(DEVICE_ID)
+
+
+def test_get_orientation_failure(toolkit, fake_factory):
+    fake_factory.get_orientation.side_effect = RuntimeError("failed to read orientation")
+    with pytest.raises(RuntimeError, match="获取屏幕方向失败"):
+        toolkit.get_orientation()
+
+
+def test_set_orientation_success(toolkit, fake_factory):
+    res = toolkit.set_orientation("landscape")
+    fake_factory.set_orientation.assert_called_once_with("landscape", DEVICE_ID)
+    assert "已将屏幕方向设置为: landscape" in res
+
+
+def test_set_orientation_failure(toolkit, fake_factory):
+    fake_factory.set_orientation.side_effect = RuntimeError("failed to set orientation")
+    with pytest.raises(RuntimeError, match="设置屏幕方向失败"):
+        toolkit.set_orientation("portrait")
+
+
+def test_screenshot_landscape_text_and_coordinates(toolkit, fake_factory, fake_adb):
+    import base64
+    from io import BytesIO
+    from PIL import Image
+
+    # Create landscape image: 2400 x 1080 (width > height)
+    img = Image.new("RGB", (2400, 1080), color=(0, 255, 0))
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    fake_factory.get_screenshot.return_value = _make_screenshot(
+        base64_data=b64, width=2400, height=1080
+    )
+    fake_adb.get_current_app_info.return_value = ("军旗手游", "com.junqi.game")
+
+    _, text = toolkit.screenshot()
+    assert "横屏 (landscape)" in text.text
+    assert "2400x1080" in text.text
+
+    # Tap within landscape boundary: (2000, 500) must succeed without out-of-range error
+    tap_res = toolkit.tap(2000, 500)
+    assert "已点击 (2000, 500)" in tap_res
+    fake_factory.tap.assert_called_once_with(2000, 500, DEVICE_ID)
+
+
+def test_batch_actions_with_set_orientation(toolkit, fake_factory):
+    actions = [
+        {"action": "set_orientation", "orientation": "landscape"},
+        {"action": "wait", "seconds": 0.5},
+    ]
+    result = toolkit.batch_actions(actions)
+    assert result["success"] is True
+    fake_factory.set_orientation.assert_called_once_with("landscape", DEVICE_ID)
+
+
+

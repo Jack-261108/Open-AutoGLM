@@ -33,6 +33,8 @@ EXPECTED_TOOLS = {
     "force_stop_app",
     "clear_app_data",
     "install_app",
+    "get_orientation",
+    "set_orientation",
 }
 
 
@@ -118,6 +120,20 @@ def test_lifecycle_tools_schema():
     install_schema = _schema(tools["install_app"])
     assert "path" in install_schema["required"]
     assert install_schema["properties"]["path"]["type"] == "string"
+
+
+def test_orientation_tools_schema():
+    server = create_server(DeviceToolkit(None))
+    tools = {t.name: t for t in asyncio.run(server.list_tools())}
+
+    # set_orientation requires orientation
+    orient_schema = _schema(tools["set_orientation"])
+    assert "orientation" in orient_schema["required"]
+    assert orient_schema["properties"]["orientation"]["type"] == "string"
+
+    # get_orientation has tool definition
+    assert "get_orientation" in tools
+
 
 
 

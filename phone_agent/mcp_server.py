@@ -3,7 +3,7 @@
 Started via ``phone-agent mcp`` (stdio transport). All logs go to stderr —
 stdout is reserved for the JSON-RPC protocol.
 
-The 17 tools are thin wrappers over DeviceFactory / phone_agent.adb:
+The 19 tools are thin wrappers over DeviceFactory / phone_agent.adb:
 
 - Coordinates are in pixels, relative to the top-left corner of the image
   returned by the ``screenshot`` tool (no 0-999 rescaling).
@@ -190,7 +190,8 @@ class DeviceToolkit:
         self._screen_size = (disp_w, disp_h)
         self._coordinate_scale = scale
 
-        text = f"分辨率 {disp_w}x{disp_h} | 当前应用: {app_text}"
+        orientation_text = "横屏 (landscape)" if disp_w > disp_h else "竖屏 (portrait)"
+        text = f"分辨率 {disp_w}x{disp_h} | 屏幕方向: {orientation_text} | 当前应用: {app_text}"
         if scale != (1.0, 1.0):
             text += f"（已按比例缩放，原物理分辨率 {shot.width}x{shot.height}，坐标会自动换算）"
         if shot.is_sensitive:
@@ -409,6 +410,23 @@ class DeviceToolkit:
                 raise RuntimeError(f"安装应用失败: {e}") from e
         return f"已成功安装应用: {path}"
 
+    def get_orientation(self) -> dict[str, Any]:
+        """Get current screen orientation and rotation status."""
+        with _device_lock:
+            try:
+                return self.factory.get_orientation(self.device_id)
+            except Exception as e:
+                raise RuntimeError(f"获取屏幕方向失败: {e}") from e
+
+    def set_orientation(self, orientation: str) -> str:
+        """Set screen orientation (portrait, landscape, or auto)."""
+        with _device_lock:
+            try:
+                self.factory.set_orientation(orientation, self.device_id)
+            except Exception as e:
+                raise RuntimeError(f"设置屏幕方向失败: {e}") from e
+        return f"已将屏幕方向设置为: {orientation}"
+
     def batch_actions(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
         """Execute a list of actions sequentially. Stops on first error."""
         if not actions:
@@ -494,6 +512,8 @@ class DeviceToolkit:
                         detail = self.launch_app(str(act["app"]))
                     elif action_name == "force_stop_app":
                         detail = self.force_stop_app(str(act["app"]))
+                    elif action_name == "set_orientation":
+                        detail = self.set_orientation(str(act["orientation"]))
                     else:
                         raise ValueError(f"不支持的动作类型: '{action_name}'")
 
@@ -669,6 +689,7 @@ def create_server(
         - home: {"action": "home"}
         - launch_app: {"action": "launch_app", "app": "微信"}
         - force_stop_app: {"action": "force_stop_app", "app": "微信"}
+        - set_orientation: {"action": "set_orientation", "orientation": "landscape"}
 
         Executes sequentially under device lock and stops immediately on first failure.
         """
@@ -688,6 +709,16 @@ def create_server(
     def install_app(path: str) -> str:
         """Install an APK file onto the device from a local file path."""
         return toolkit.install_app(path)
+
+    @server.tool()
+    def get_orientation() -> dict[str, Any]:
+        """Get current device screen orientation and rotation status (portrait/landscape, rotation code)."""
+        return toolkit.get_orientation()
+
+    @server.tool()
+    def set_orientation(orientation: str) -> str:
+        """Set device screen orientation: "portrait" (lock portrait), "landscape" (lock landscape), or "auto" (system auto-rotate)."""
+        return toolkit.set_orientation(orientation)
 
     return server
 

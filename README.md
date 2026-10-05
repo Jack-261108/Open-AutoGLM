@@ -89,6 +89,8 @@ phone-agent mcp --listen 0.0.0.0:8000
 | `force_stop_app` | app | 强制停止应用：内置中文名或包名，用于关闭卡死应用或退出重置 |
 | `clear_app_data` | app | 清除应用全部数据与缓存：重置为首次安装状态，适用于测试与 Benchmark |
 | `install_app` | path | 安装本地 APK 文件到设备中（`-r` 保留数据重新安装） |
+| `get_orientation` | - | 获取屏幕方向与旋转模式（横屏/竖屏、旋转角度） |
+| `set_orientation` | orientation | 设置/锁定屏幕方向（"portrait" 锁定竖屏 / "landscape" 锁定横屏 / "auto" 恢复自动旋转） |
 | `wait` | seconds=1.0 | 等待画面变化（0.1–30 秒） |
 
 **示例：玩军旗**

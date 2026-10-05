@@ -281,6 +281,20 @@ class DeviceFactory:
             f"install_app is not supported for {self.device_type}"
         )
 
+    def get_orientation(self, device_id: str | None = None) -> dict[str, Any]:
+        """Get screen orientation and rotation status."""
+        if hasattr(self.module, "get_orientation"):
+            return self.module.get_orientation(device_id)
+        return {"orientation": "portrait", "rotation": 0, "is_landscape": False}
+
+    def set_orientation(self, orientation: str, device_id: str | None = None) -> None:
+        """Set screen orientation (portrait, landscape, auto)."""
+        if hasattr(self.module, "set_orientation"):
+            return self.module.set_orientation(orientation, device_id)
+        raise NotImplementedError(
+            f"set_orientation is not supported for {self.device_type}"
+        )
+
     def hide_keyboard(self, device_id: str | None = None):
         """Hide keyboard if platform requires it."""
         if self.device_type == DeviceType.IOS:

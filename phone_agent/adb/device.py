@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 import time
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from phone_agent.config.apps import APP_PACKAGES
 from phone_agent.config.timing import TIMING_CONFIG
@@ -428,6 +428,103 @@ def install_app(apk_path: str, device_id: str | None = None) -> None:
     output = (result.stdout or "") + (result.stderr or "")
     if result.returncode != 0 or "Failure" in output:
         raise RuntimeError(f"安装 APK 失败: {output.strip() or 'unknown error'}")
+
+
+def get_orientation(device_id: str | None = None) -> dict[str, Any]:
+    """
+    Get the current screen orientation and rotation.
+
+    Returns:
+        dict containing:
+        - "orientation": "portrait" | "landscape"
+        - "rotation": int (0: portrait, 1: landscape 90deg, 2: reverse portrait, 3: reverse landscape 270deg)
+        - "is_landscape": bool
+    """
+    adb_prefix = _get_adb_prefix(device_id)
+
+    rotation = 0
+    res = subprocess.run(
+        adb_prefix + ["shell", "dumpsys", "input"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        stdin=subprocess.DEVNULL,
+    )
+    output = res.stdout or ""
+    match = re.search(r"SurfaceOrientation:\s*([0-3])", output)
+    if match:
+        rotation = int(match.group(1))
+    else:
+        res_win = subprocess.run(
+            adb_prefix + ["shell", "dumpsys", "window"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            stdin=subprocess.DEVNULL,
+        )
+        win_output = res_win.stdout or ""
+        match_win = re.search(r"(?:mCurrentRotation|mRotation)=(\d+)", win_output)
+        if match_win:
+            rotation = int(match_win.group(1)) % 4
+
+    is_landscape = rotation in (1, 3)
+    orientation = "landscape" if is_landscape else "portrait"
+    return {
+        "orientation": orientation,
+        "rotation": rotation,
+        "is_landscape": is_landscape,
+    }
+
+
+def set_orientation(orientation: str, device_id: str | None = None) -> None:
+    """
+    Set or lock device screen orientation.
+
+    Args:
+        orientation: "portrait" (lock portrait), "landscape" (lock landscape),
+                     or "auto" (enable accelerometer auto-rotation).
+        device_id: Optional ADB device ID.
+    """
+    norm = orientation.strip().lower()
+    adb_prefix = _get_adb_prefix(device_id)
+
+    if norm == "auto":
+        subprocess.run(
+            adb_prefix + ["shell", "settings", "put", "system", "accelerometer_rotation", "1"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+    elif norm == "portrait":
+        subprocess.run(
+            adb_prefix + ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            adb_prefix + ["shell", "settings", "put", "system", "user_rotation", "0"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+    elif norm == "landscape":
+        subprocess.run(
+            adb_prefix + ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            adb_prefix + ["shell", "settings", "put", "system", "user_rotation", "1"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+    else:
+        raise ValueError(
+            f"不支持的屏幕方向: '{orientation}'。支持: 'portrait', 'landscape', 'auto'"
+        )
 
 
 def _get_adb_prefix(device_id: str | None) -> list:

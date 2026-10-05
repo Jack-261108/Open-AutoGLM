@@ -14,11 +14,13 @@ from phone_agent.adb.device import (
     force_stop_app,
     get_current_app,
     get_current_app_info,
+    get_orientation,
     home,
     install_app,
     launch_app,
     launch_app_by_package,
     long_press,
+    set_orientation,
     swipe,
     tap,
 )
@@ -58,6 +60,8 @@ __all__ = [
     "force_stop_app",
     "clear_app_data",
     "install_app",
+    "get_orientation",
+    "set_orientation",
     # Connection management
     "ADBConnection",
     "DeviceInfo",
