@@ -9,10 +9,15 @@ from phone_agent.adb.connection import (
 )
 from phone_agent.adb.device import (
     back,
+    clear_app_data,
     double_tap,
+    force_stop_app,
     get_current_app,
+    get_current_app_info,
     home,
+    install_app,
     launch_app,
+    launch_app_by_package,
     long_press,
     swipe,
     tap,
@@ -20,7 +25,10 @@ from phone_agent.adb.device import (
 from phone_agent.adb.input import (
     clear_text,
     detect_and_set_adb_keyboard,
+    get_clipboard,
+    get_current_ime,
     restore_keyboard,
+    set_clipboard,
     type_text,
 )
 from phone_agent.adb.screenshot import get_screenshot
@@ -31,10 +39,14 @@ __all__ = [
     # Input
     "type_text",
     "clear_text",
+    "get_clipboard",
+    "set_clipboard",
     "detect_and_set_adb_keyboard",
+    "get_current_ime",
     "restore_keyboard",
     # Device control
     "get_current_app",
+    "get_current_app_info",
     "tap",
     "swipe",
     "back",
@@ -42,6 +54,10 @@ __all__ = [
     "double_tap",
     "long_press",
     "launch_app",
+    "launch_app_by_package",
+    "force_stop_app",
+    "clear_app_data",
+    "install_app",
     # Connection management
     "ADBConnection",
     "DeviceInfo",

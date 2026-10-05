@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -83,6 +84,7 @@ class ADBConnection:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                stdin=subprocess.DEVNULL,
             )
 
             output = result.stdout + result.stderr
@@ -114,7 +116,14 @@ class ADBConnection:
             if address:
                 cmd.append(address)
 
-            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=5)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=5,
+                stdin=subprocess.DEVNULL,
+            )
 
             output = result.stdout + result.stderr
             return True, output.strip() or "Disconnected"
@@ -135,6 +144,7 @@ class ADBConnection:
                 capture_output=True,
                 text=True,
                 timeout=5,
+                stdin=subprocess.DEVNULL,
             )
 
             devices = []
@@ -183,7 +193,7 @@ class ADBConnection:
             return devices
 
         except Exception as e:
-            print(f"Error listing devices: {e}")
+            print(f"Error listing devices: {e}", file=sys.stderr)
             return []
 
     def get_device_info(self, device_id: str | None = None) -> DeviceInfo | None:
@@ -255,7 +265,14 @@ class ADBConnection:
                 cmd.extend(["-s", device_id])
             cmd.extend(["tcpip", str(port)])
 
-            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=10)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=10,
+                stdin=subprocess.DEVNULL,
+            )
 
             output = result.stdout + result.stderr
 
@@ -284,7 +301,14 @@ class ADBConnection:
                 cmd.extend(["-s", device_id])
             cmd.extend(["shell", "ip", "route"])
 
-            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=5)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=5,
+                stdin=subprocess.DEVNULL,
+            )
 
             # Parse IP from route output
             for line in result.stdout.split("\n"):
@@ -302,6 +326,7 @@ class ADBConnection:
                 text=True,
                 encoding="utf-8",
                 timeout=5,
+                stdin=subprocess.DEVNULL,
             )
 
             for line in result.stdout.split("\n"):
@@ -313,7 +338,7 @@ class ADBConnection:
             return None
 
         except Exception as e:
-            print(f"Error getting device IP: {e}")
+            print(f"Error getting device IP: {e}", file=sys.stderr)
             return None
 
     def restart_server(self) -> tuple[bool, str]:
@@ -326,14 +351,20 @@ class ADBConnection:
         try:
             # Kill server
             subprocess.run(
-                [self.adb_path, "kill-server"], capture_output=True, timeout=5
+                [self.adb_path, "kill-server"],
+                capture_output=True,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
             )
 
             time.sleep(TIMING_CONFIG.connection.server_restart_delay)
 
             # Start server
             subprocess.run(
-                [self.adb_path, "start-server"], capture_output=True, timeout=5
+                [self.adb_path, "start-server"],
+                capture_output=True,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
             )
 
             return True, "ADB server restarted"

@@ -241,6 +241,46 @@ class DeviceFactory:
             )
         return self.module.clear_text(device_id)
 
+    def get_clipboard(self, device_id: str | None = None) -> str:
+        """Get system clipboard text."""
+        if hasattr(self.module, "get_clipboard"):
+            return self.module.get_clipboard(device_id)
+        raise NotImplementedError(
+            f"get_clipboard is not supported for {self.device_type}"
+        )
+
+    def set_clipboard(self, text: str, device_id: str | None = None) -> None:
+        """Set system clipboard text."""
+        if hasattr(self.module, "set_clipboard"):
+            return self.module.set_clipboard(text, device_id)
+        raise NotImplementedError(
+            f"set_clipboard is not supported for {self.device_type}"
+        )
+
+    def force_stop_app(self, app: str, device_id: str | None = None) -> None:
+        """Force stop an application."""
+        if hasattr(self.module, "force_stop_app"):
+            return self.module.force_stop_app(app, device_id)
+        raise NotImplementedError(
+            f"force_stop_app is not supported for {self.device_type}"
+        )
+
+    def clear_app_data(self, app: str, device_id: str | None = None) -> None:
+        """Clear all data and cache for an application."""
+        if hasattr(self.module, "clear_app_data"):
+            return self.module.clear_app_data(app, device_id)
+        raise NotImplementedError(
+            f"clear_app_data is not supported for {self.device_type}"
+        )
+
+    def install_app(self, apk_path: str, device_id: str | None = None) -> None:
+        """Install an application package."""
+        if hasattr(self.module, "install_app"):
+            return self.module.install_app(apk_path, device_id)
+        raise NotImplementedError(
+            f"install_app is not supported for {self.device_type}"
+        )
+
     def hide_keyboard(self, device_id: str | None = None):
         """Hide keyboard if platform requires it."""
         if self.device_type == DeviceType.IOS:

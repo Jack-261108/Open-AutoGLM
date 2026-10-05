@@ -35,6 +35,68 @@ Phone Agent is a mobile intelligent assistant framework built on AutoGLM. It und
 
 Midscene.js already supports AutoGLM; see the [Midscene.js integration guide](https://midscenejs.com/model-common-config.html#auto-glm) to quickly try AutoGLM automation on both iOS and Android devices.
 
+### Claude Code (MCP Server)
+
+This project ships an MCP server that exposes Android screenshot and control capabilities to MCP clients such as Claude Code. Claude's vision and reasoning "watch the screen and decide", while this project "executes the actions" — step by step completing intelligent tasks like playing board games (e.g. military chess) or filling forms.
+
+**Prerequisites** (no model deployment needed):
+
+1. adb installed with an Android device connected (see [Environment Setup](#environment-setup) below)
+2. This project installed: `pip install -e .` (brings in the `mcp` dependency)
+3. ADB Keyboard recommended (only needed by the `type_text` tool)
+
+**Register with Claude Code**:
+
+```bash
+claude mcp add phone-agent -- phone-agent mcp
+
+# Pick a specific device (when several are connected)
+claude mcp add phone-agent -- phone-agent mcp --device-id <adb-device-id>
+
+# Remote / Network service mode (for device farms / cloud devices, endpoint /mcp)
+phone-agent mcp --listen 0.0.0.0:8000
+```
+
+Then check the connection with `/mcp` inside Claude Code and simply give it a task.
+
+**Tool overview** (coordinates are pixels, origin at the top-left of the screenshot; scaled coordinates are mapped back automatically):
+
+| Tool | Parameters | Description |
+|------|------------|-------------|
+| `screenshot` | max_dimension?, quality=80 | Capture the screen (image + resolution + current app). For fast games, pass `max_dimension=1080` or `800` to downscale and compress to JPEG, saving up to 90% transfer size and 60% visual tokens |
+| `get_current_app` | - | Focused app (name + package) |
+| `tap` | x, y | Tap |
+| `double_tap` | x, y | Double tap |
+| `long_press` | x, y, duration_ms=1000 | Long press |
+| `swipe` | start_x, start_y, end_x, end_y, duration_ms? | Swipe (duration auto-calculated when omitted) |
+| `move_piece` | from_x, from_y, to_x, to_y, interval_ms=300 | Board game move: taps start then target in a single turn, eliminating a roundtrip |
+| `type_text` | text, clear=False | Type text (needs ADB Keyboard; clear=True empties the field first) |
+| `get_clipboard` | - | Get current text from system clipboard |
+| `set_clipboard` | text | Set text into system clipboard (ideal for pasting long text, tokens, or URLs) |
+| `batch_actions` | actions | General action batching: execute a list of sequential actions (e.g. tap, wait, type) in one turn to reduce LLM roundtrips |
+| `back` / `home` | - | Back / Home key |
+| `launch_app` | app | Launch by built-in name (e.g. "微信") or package name (e.g. `com.tencent.mm`) |
+| `force_stop_app` | app | Force stop an app by name or package (e.g. to recover from crashes) |
+| `clear_app_data` | app | Clear all data and cache for an app (resets to initial state for testing) |
+| `install_app` | path | Install a local APK file onto the device (`-r` reinstall) |
+| `wait` | seconds=1.0 | Wait for the screen to change (0.1–30 s) |
+
+**Example: playing military chess**
+
+> Use the phone-agent MCP tools to play military chess on my phone: launch the game with `launch_app` (use its package name — `adb shell pm list packages` — if not in the built-in list). Each round, first call `screenshot(max_dimension=1080)` to inspect the board, reason about the game, then use `move_piece` to make a move (or `tap` to flip a piece); while waiting for the opponent, `wait` 2 seconds and screenshot again. When unsure, describe the board before acting.
+
+**Speed Optimization Tips for Time-Constrained Scenarios**:
+
+- **General Action Batching**: Use `batch_actions` to execute multiple deterministic steps in sequence (e.g. tapping an input field then typing text) in a single turn, eliminating unnecessary screenshot-reasoning roundtrips.
+- **Single-turn moves**: Use `move_piece(from_x, from_y, to_x, to_y)` instead of two individual `tap` calls. Both selection and placement happen in one model turn.
+- **Lower image size**: Set `export PHONE_AGENT_SCREENSHOT_MAX_DIM=1080` in your environment or call `screenshot(max_dimension=1080)`. Transfer size drops from 2MB to 80KB and visual tokens drop by ~60%, drastically cutting inference latency while coordinates map back to device pixels automatically.
+
+**FAQ**:
+
+- The on-device keyboard switches to ADB Keyboard during the session; the original keyboard is restored as soon as possible
+- When a black image is returned, read the accompanying warning: payment and other sensitive screens block screenshots; a disconnected device also yields a black image and recovers automatically once reconnected
+- If an action seems to have no effect, take another screenshot to confirm
+
 ## Model Download Links
 
 | Model             | Download Links                                                                                                                                             |

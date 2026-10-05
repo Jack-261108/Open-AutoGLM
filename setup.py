@@ -16,6 +16,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/phone-agent",
     packages=find_packages(),
+    py_modules=["main"],
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
@@ -34,6 +35,7 @@ setup(
         "openai>=2.9.0",
         "anthropic>=0.117.1",
         "httpx>=0.28.1",
+        "mcp>=1.9.0,<2",
     ],
     extras_require={
         "dev": [

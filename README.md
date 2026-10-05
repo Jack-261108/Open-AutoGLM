@@ -45,6 +45,68 @@ ADB 调试能力，可通过 WiFi 或网络连接设备，实现灵活的远程�
 
 目前 Midscene.js 已完成对 AutoGLM 模型的适配，你可以通过 [Midscene.js 接入指南](https://midscenejs.com/zh/model-common-config.html#auto-glm) 快速体验 AutoGLM 在 iOS 和 Android 设备上的自动化效果。
 
+### Claude Code（MCP Server）
+
+本项目内置了一个 MCP server，可以把 Android 设备的截图与操控能力暴露给 Claude Code 等 MCP 客户端。由 Claude 的视觉与推理能力负责"看屏幕、做决策"，本项目负责"执行动作"，从而一步步完成玩手机游戏（如军旗）、填表单等需要智能规划的任务。
+
+**前置条件**（无需部署模型服务）：
+
+1. 已安装 adb 并连接 Android 设备（参见下方 [Android 环境准备](#android-环境准备)）
+2. 已安装本项目：`pip install -e .`（自动带上 `mcp` 依赖）
+3. 建议安装 ADB Keyboard（仅 `type_text` 工具需要，参见下方 [安装 ADB Keyboard](#4-安装-adb-keyboard仅-android-设备需要用于文本输入)）
+
+**接入 Claude Code**：
+
+```bash
+claude mcp add phone-agent -- phone-agent mcp
+
+# 指定设备（多设备时）
+claude mcp add phone-agent -- phone-agent mcp --device-id <adb设备ID>
+
+# 远程 / 局域网服务模式（支持云真机 / 设备机房，默认端点 /mcp）
+phone-agent mcp --listen 0.0.0.0:8000
+```
+
+之后在 Claude Code 中即可使用 `/mcp` 查看连接状态，直接下达任务。
+
+**工具一览**（坐标均为像素，原点为截图左上角；缩放截图时坐标自动换算映射）：
+
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| `screenshot` | max_dimension?, quality=80 | 截图（返回图片 + 分辨率 + 当前应用）。快速对弈场景可设置 `max_dimension=1080` 或 `800`，自动下采样并压缩为 JPEG，大幅降低传输体积与视觉 Token |
+| `get_current_app` | - | 当前前台应用（名称 + 包名） |
+| `tap` | x, y | 点击 |
+| `double_tap` | x, y | 双击 |
+| `long_press` | x, y, duration_ms=1000 | 长按 |
+| `swipe` | start_x, start_y, end_x, end_y, duration_ms? | 滑动（时长缺省按距离自适应） |
+| `move_piece` | from_x, from_y, to_x, to_y, interval_ms=300 | 棋类复合走子：单次调用依次点击起点与终点，省去一轮模型思考往返 |
+| `type_text` | text, clear=False | 输入文本（需 ADB Keyboard；clear=True 先清空输入框） |
+| `get_clipboard` | - | 获取系统剪贴板文本内容 |
+| `set_clipboard` | text | 设置系统剪贴板文本（适合粘贴长文本、Token 或 URL） |
+| `batch_actions` | actions | 通用动作批处理：单次调用顺序执行一组连续动作（如点击、等待、输入等），节省多轮思考往返并在遇到错误时立即中断 |
+| `back` / `home` | - | 返回键 / 主页键 |
+| `launch_app` | app | 启动应用：内置中文名（如"微信"）或包名（如 `com.tencent.mm`） |
+| `force_stop_app` | app | 强制停止应用：内置中文名或包名，用于关闭卡死应用或退出重置 |
+| `clear_app_data` | app | 清除应用全部数据与缓存：重置为首次安装状态，适用于测试与 Benchmark |
+| `install_app` | path | 安装本地 APK 文件到设备中（`-r` 保留数据重新安装） |
+| `wait` | seconds=1.0 | 等待画面变化（0.1–30 秒） |
+
+**示例：玩军旗**
+
+> 用 phone-agent 的 MCP 工具和我手机上的军旗下棋：先 `launch_app` 启动军旗 App（不在内置列表就用包名，可用 `adb shell pm list packages` 查询），之后每一轮先用 `screenshot(max_dimension=1080)` 看棋盘，推理双方棋子与局势，再用 `move_piece` 走子（或用 `tap` 翻棋）；轮到对方走棋时 `wait` 2 秒后重新截图。不确定局面就先描述棋盘再行动。
+
+**高频对弈/限时操作提速建议**：
+
+- **通用动作批处理**：需要连续执行几个确定性动作时（例如点击输入框后等待并输入文本），优先使用 `batch_actions` 一次性下发，省去多次“截图-推理”的往返延迟。
+- **单轮走子**：下棋时优先使用 `move_piece(from_x, from_y, to_x, to_y)` 代替两次单独的 `tap`，一次模型思考即可完成选子与落子。
+- **降低图片尺寸**：在环境变量中设置 `export PHONE_AGENT_SCREENSHOT_MAX_DIM=1080`，或在调用 `screenshot(max_dimension=1080)` 时限制尺寸，图片体积从 2MB 骤降至 80KB，视觉 Token 减少 60% 以上，显著加速首字推理（坐标会自动等比换算回真机像素，无需人工换算）。
+
+**常见问题**：
+
+- 会话期间手机输入法被切换为 ADB Keyboard 属预期行为，工具执行后会尽力恢复原输入法
+- 截图返回黑图时阅读伴随的警告文本：支付等敏感页面系统禁止截图；设备断连时也会返回黑图，恢复连接后自动恢复
+- 怀疑操作没生效时，先再截一张图确认
+
 ## 模型下载地址
 
 | Model                         | Download Links                                                                                                                                                         |

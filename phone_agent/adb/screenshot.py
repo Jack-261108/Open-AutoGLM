@@ -3,6 +3,7 @@
 import base64
 import os
 import subprocess
+import sys
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -48,6 +49,7 @@ def get_screenshot(device_id: str | None = None, timeout: int = 10) -> Screensho
             capture_output=True,
             text=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
 
         # Check for screenshot failure (sensitive screen)
@@ -61,6 +63,7 @@ def get_screenshot(device_id: str | None = None, timeout: int = 10) -> Screensho
             capture_output=True,
             text=True,
             timeout=5,
+            stdin=subprocess.DEVNULL,
         )
 
         if not os.path.exists(temp_path):
@@ -82,7 +85,7 @@ def get_screenshot(device_id: str | None = None, timeout: int = 10) -> Screensho
         )
 
     except Exception as e:
-        print(f"Screenshot error: {e}")
+        print(f"Screenshot error: {e}", file=sys.stderr)
         return _create_fallback_screenshot(is_sensitive=False)
 
 

@@ -611,6 +611,16 @@ def handle_device_commands(args) -> bool:
 
 def main(argv: list[str] | None = None) -> None:
     """Main entry point."""
+    # MCP server mode: `phone-agent mcp [...]` is handled by a dedicated
+    # entrypoint before the main parser (which has no `mcp` subcommand).
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "mcp":
+        from phone_agent.mcp_server import run_mcp_command
+
+        run_mcp_command(argv[1:])
+        return
+
     agent = None
     model_client = None
 
