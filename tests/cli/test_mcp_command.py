@@ -93,3 +93,4 @@ def test_run_mcp_command_parses_listen_and_transport(monkeypatch):
     assert created["port"] == 9000
     assert ran["transport"] == "sse"
 
+

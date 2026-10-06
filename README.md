@@ -69,6 +69,20 @@ phone-agent mcp --listen 0.0.0.0:8000
 
 之后在 Claude Code 中即可使用 `/mcp` 查看连接状态，直接下达任务。
 
+### 终端实时屏幕镜像插件（Claude Code Live Pane）
+
+为告别自动化过程中的“黑盒盲盒”状态并实时查看设备画面，本项目提供了 Claude Code 侧栏屏幕镜像插件（对标 `mobile-next/mobile-mcp`）：
+
+```bash
+claude --plugin-dir ./plugins/phone-mirror
+```
+
+进入 Claude Code 后运行 `/phone-mirror [device-id]`，即可在右侧开辟实时屏幕镜像视窗（支持 Ghostty / kitty 终端图形协议）。支持：
+- 🖱️ **鼠标点击交互（Click-to-Tap）**：鼠标直接点击终端里的手机画面，即可映射真实像素坐标并在手机上触发点击
+- ⌨️ **键盘打字输入（Type-to-Send）**：聚焦画面后在终端敲击键盘，按键与文本自动实时输入到手机
+- ⚡ **无闪烁流式刷新**：采用三缓冲轮转与 `$.ui.blit` 原地推流增量换帧，告别终端闪烁
+- 🔘 **全套导航按键**：顶部支持 `[ Home ]`、`[ Back ]`、`[ App Switch ]`（多任务）、`[ URL ]`（内嵌网址输入）与 `[ Refresh ]`
+
 **工具一览**（坐标均为像素，原点为截图左上角；缩放截图时坐标自动换算映射）：
 
 | 工具 | 参数 | 说明 |

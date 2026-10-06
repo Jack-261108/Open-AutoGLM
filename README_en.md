@@ -59,6 +59,20 @@ phone-agent mcp --listen 0.0.0.0:8000
 
 Then check the connection with `/mcp` inside Claude Code and simply give it a task.
 
+### Live Screen Mirror Plugin (Claude Code Live Pane)
+
+To monitor device screen in real time without leaving Claude Code:
+
+```bash
+claude --plugin-dir ./plugins/phone-mirror
+```
+
+Run `/phone-mirror [device-id]` inside Claude Code to open a live side pane with the device screen (supports Ghostty / kitty graphics protocol):
+- 🖱️ **Click-to-Tap**: Click anywhere on the mirrored screen in the terminal to tap the device at mapped screen pixels.
+- ⌨️ **Type-to-Send**: Focus the mirrored pane and type on your keyboard to send keystrokes and text directly to the device.
+- ⚡ **Flicker-Free Blit Stream**: Triple-buffering and `$.ui.blit` in-place pixel updates eliminate terminal screen flicker.
+- 🔘 **Navigation Buttons**: `[ Home ]`, `[ Back ]`, `[ App Switch ]`, inline `[ URL ]` launcher, and `[ Refresh ]`.
+
 **Tool overview** (coordinates are pixels, origin at the top-left of the screenshot; scaled coordinates are mapped back automatically):
 
 | Tool | Parameters | Description |

@@ -1,0 +1,8 @@
+{
+  "name": "phone-mirror",
+  "version": "0.1.0",
+  "description": "Live mobile screen mirror and tap interaction in Claude Code pane",
+  "author": {
+    "name": "Open-AutoGLM"
+  }
+}

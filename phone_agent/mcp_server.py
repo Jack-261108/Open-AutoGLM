@@ -67,13 +67,14 @@ def _downscale_and_compress(
     orig_h: int,
     max_dimension: int | None,
     quality: int = 80,
+    format: str = "jpeg",
 ) -> tuple[str, str, int, int, tuple[float, float]]:
-    """Downscale and compress screenshot to JPEG if requested.
+    """Downscale and compress screenshot to JPEG or PNG if requested.
 
     Returns (base64_data, mime_type, width, height, (scale_x, scale_y)).
     If processing fails (e.g. invalid test mock data), falls back to original.
     """
-    if max_dimension is None:
+    if max_dimension is None and format.lower() != "jpeg":
         return base64_data, "image/png", orig_w, orig_h, (1.0, 1.0)
 
     try:
@@ -89,15 +90,20 @@ def _downscale_and_compress(
         else:
             new_w, new_h = cur_w, cur_h
 
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
         buf = BytesIO()
-        img.save(buf, format="JPEG", quality=max(10, min(quality, 100)))
+        if format.lower() == "png":
+            img.save(buf, format="PNG")
+            mime_type = "image/png"
+        else:
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            img.save(buf, format="JPEG", quality=max(10, min(quality, 100)))
+            mime_type = "image/jpeg"
         new_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
         scale_x = orig_w / new_w if new_w > 0 else 1.0
         scale_y = orig_h / new_h if new_h > 0 else 1.0
-        return new_b64, "image/jpeg", new_w, new_h, (scale_x, scale_y)
+        return new_b64, mime_type, new_w, new_h, (scale_x, scale_y)
     except Exception:
         return base64_data, "image/png", orig_w, orig_h, (1.0, 1.0)
 
@@ -164,6 +170,7 @@ class DeviceToolkit:
         self,
         max_dimension: int | None = None,
         quality: int = 80,
+        format: str = "jpeg",
     ) -> list[TextContent | ImageContent]:
         """Capture a screenshot and report the current app."""
         if max_dimension is None:
@@ -185,6 +192,7 @@ class DeviceToolkit:
             shot.height,
             max_dimension,
             quality,
+            format=format,
         )
 
         self._screen_size = (disp_w, disp_h)
@@ -573,6 +581,7 @@ def create_server(
     def screenshot(
         max_dimension: int | None = None,
         quality: int = 80,
+        format: str = "jpeg",
     ) -> list[TextContent | ImageContent]:
         """Capture a screenshot of the device screen and report the current app.
 
@@ -583,7 +592,9 @@ def create_server(
         to significantly reduce transfer size and model inference latency.
         Coordinates are automatically mapped back to physical screen pixels.
         """
-        return toolkit.screenshot(max_dimension=max_dimension, quality=quality)
+        return toolkit.screenshot(
+            max_dimension=max_dimension, quality=quality, format=format
+        )
 
     @server.tool()
     def get_current_app() -> str:
